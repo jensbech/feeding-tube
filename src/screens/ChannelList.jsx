@@ -4,13 +4,13 @@ import TextInput from 'ink-text-input';
 import Header from '../components/Header.jsx';
 import Loading from '../components/Loading.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
-import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed } from '../lib/config.js';
+import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed, markAllChannelsViewed } from '../lib/config.js';
 import { getChannelInfo, primeChannel, refreshAllVideos } from '../lib/ytdlp.js';
 
-export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefreshDone }) {
+export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefreshDone, savedIndex }) {
   const [subscriptions, setSubscriptions] = useState([]);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [mode, setMode] = useState('list'); // 'list' | 'add' | 'confirm-delete' | 'confirm-prime'
+  const [selectedIndex, setSelectedIndex] = useState(savedIndex || 0);
+  const [mode, setMode] = useState('list'); // 'list' | 'add' | 'confirm-delete' | 'confirm-prime' | 'confirm-mark-all'
   const [addUrl, setAddUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
@@ -83,6 +83,20 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
       return;
     }
 
+    if (mode === 'confirm-mark-all') {
+      if (input === 'n' || input === 'N') {
+        setMode('list');
+      } else if (input === 'y' || input === 'Y' || key.return) {
+        // Mark all channels as viewed (clears dots)
+        const channelIds = subscriptions.map((s) => s.id);
+        markAllChannelsViewed(channelIds);
+        setNewCounts(new Map());
+        setMessage('Marked all channels as read');
+        setMode('list');
+      }
+      return;
+    }
+
     // List mode
     if (input === 'q') {
       onQuit();
@@ -105,6 +119,8 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
         setMessage('Refreshed');
       };
       refresh();
+    } else if (input === 'm') {
+      setMode('confirm-mark-all');
     } else if (key.upArrow || input === 'k') {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === 'j') {
@@ -119,7 +135,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
           next.delete(channel.id);
           return next;
         });
-        onSelectChannel(channel);
+        onSelectChannel(channel, selectedIndex);
       }
     }
   });
@@ -267,24 +283,31 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
         </Box>
       )}
 
-      {message && (
-        <Box marginTop={1}>
-          <Text color="green">{message}</Text>
-        </Box>
-      )}
+       {message && (
+         <Box marginTop={1}>
+           <Text color="green">{message}</Text>
+         </Box>
+       )}
 
-      <StatusBar>
-        {mode === 'list' && (
-          <>
-            <KeyHint keyName="a" description="dd" />
-            {subscriptions.length > 0 && <KeyHint keyName="d" description="elete" />}
-            <KeyHint keyName="v" description="iew all" />
-            <KeyHint keyName="r" description="efresh" />
-            <KeyHint keyName="Enter" description=" browse" />
-            <KeyHint keyName="q" description="uit" />
-          </>
-        )}
-      </StatusBar>
+       {mode === 'confirm-mark-all' && (
+         <Box marginTop={1}>
+           <Text>Clear all new video indicators? (y/n)</Text>
+         </Box>
+       )}
+
+       <StatusBar>
+         {mode === 'list' && (
+           <>
+             <KeyHint keyName="a" description="dd" />
+             {subscriptions.length > 0 && <KeyHint keyName="d" description="elete" />}
+             <KeyHint keyName="v" description="iew all" />
+             <KeyHint keyName="r" description="efresh" />
+             <KeyHint keyName="m" description="ark all read" />
+             <KeyHint keyName="Enter" description=" browse" />
+             <KeyHint keyName="q" description="uit" />
+           </>
+         )}
+       </StatusBar>
     </Box>
   );
 }

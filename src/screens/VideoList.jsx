@@ -4,7 +4,7 @@ import Header from '../components/Header.jsx';
 import Loading from '../components/Loading.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
 import { getChannelVideos, refreshAllVideos, getVideoPage } from '../lib/ytdlp.js';
-import { getSubscriptions, getSettings, getWatchedIds, updateSettings } from '../lib/config.js';
+import { getSubscriptions, getSettings, getWatchedIds, updateSettings, toggleWatched } from '../lib/config.js';
 import { playVideo } from '../lib/player.js';
 
 export default function VideoList({ channel, onBack }) {
@@ -167,6 +167,12 @@ export default function VideoList({ channel, onBack }) {
     } else if (input === 'p' && !channel && currentPage > 0) {
       // Previous page (only in "all videos" view)
       setCurrentPage((p) => p - 1);
+    } else if (input === 'w' && videos.length > 0) {
+      // Toggle watched status
+      const video = videos[selectedIndex];
+      const nowWatched = toggleWatched(video.id);
+      setWatchedIds(getWatchedIds());
+      setMessage(nowWatched ? 'Marked as watched' : 'Marked as unwatched');
     } else if (key.upArrow || input === 'k') {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === 'j') {
@@ -309,6 +315,7 @@ export default function VideoList({ channel, onBack }) {
         ) : (
           <>
             <KeyHint keyName="Enter" description=" play" />
+            <KeyHint keyName="w" description="atched" />
             <KeyHint keyName="/" description=" filter" />
             <KeyHint keyName="s" description={hideShorts ? " +shorts" : " -shorts"} />
             {!channel && totalPages > 1 && (

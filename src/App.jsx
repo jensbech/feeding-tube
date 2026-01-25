@@ -8,8 +8,10 @@ export default function App({ initialChannel }) {
   const [screen, setScreen] = useState(initialChannel ? 'videos' : 'channels');
   const [selectedChannel, setSelectedChannel] = useState(initialChannel || null);
   const hasCheckedForNew = useRef(false);
+  const savedChannelListIndex = useRef(0);
 
-  const handleSelectChannel = (channel) => {
+  const handleSelectChannel = (channel, index) => {
+    savedChannelListIndex.current = index;
     setSelectedChannel(channel);
     setScreen('videos');
   };
@@ -41,6 +43,7 @@ export default function App({ initialChannel }) {
           onQuit={handleQuit}
           skipRefresh={hasCheckedForNew.current}
           onRefreshDone={markChecked}
+          savedIndex={savedChannelListIndex.current}
         />
       )}
       {screen === 'videos' && (

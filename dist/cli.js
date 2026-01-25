@@ -190,6 +190,20 @@ function getWatchedIds() {
   const watched = loadWatched();
   return new Set(Object.keys(watched.videos));
 }
+function toggleWatched(videoId) {
+  const watched = loadWatched();
+  if (watched.videos[videoId]) {
+    delete watched.videos[videoId];
+    saveWatched(watched);
+    return false;
+  } else {
+    watched.videos[videoId] = {
+      watchedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    saveWatched(watched);
+    return true;
+  }
+}
 var videoStoreCache = null;
 var sortedIndexCache = null;
 var filteredIndexCache = null;
@@ -309,6 +323,17 @@ function updateChannelLastViewed(channelId) {
     config.channelLastViewed = {};
   }
   config.channelLastViewed[channelId] = (/* @__PURE__ */ new Date()).toISOString();
+  saveConfig(config);
+}
+function markAllChannelsViewed(channelIds) {
+  const config = loadConfig();
+  if (!config.channelLastViewed) {
+    config.channelLastViewed = {};
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  for (const channelId of channelIds) {
+    config.channelLastViewed[channelId] = now;
+  }
   saveConfig(config);
 }
 function getNewVideoCounts() {
@@ -591,9 +616,9 @@ async function primeChannel(channel, onProgress) {
 
 // src/screens/ChannelList.jsx
 import { Fragment as Fragment2, jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
-function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefreshDone }) {
+function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefreshDone, savedIndex }) {
   const [subscriptions, setSubscriptions] = useState([]);
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedIndex, setSelectedIndex] = useState(savedIndex || 0);
   const [mode, setMode] = useState("list");
   const [addUrl, setAddUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -653,6 +678,18 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
       }
       return;
     }
+    if (mode === "confirm-mark-all") {
+      if (input === "n" || input === "N") {
+        setMode("list");
+      } else if (input === "y" || input === "Y" || key.return) {
+        const channelIds = subscriptions.map((s) => s.id);
+        markAllChannelsViewed(channelIds);
+        setNewCounts(/* @__PURE__ */ new Map());
+        setMessage("Marked all channels as read");
+        setMode("list");
+      }
+      return;
+    }
     if (input === "q") {
       onQuit();
     } else if (input === "a") {
@@ -673,6 +710,8 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
         setMessage("Refreshed");
       };
       refresh();
+    } else if (input === "m") {
+      setMode("confirm-mark-all");
     } else if (key.upArrow || input === "k") {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === "j") {
@@ -686,7 +725,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
           next.delete(channel.id);
           return next;
         });
-        onSelectChannel(channel);
+        onSelectChannel(channel, selectedIndex);
       }
     }
   });
@@ -809,11 +848,13 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
       error
     ] }) }),
     message && /* @__PURE__ */ jsx4(Box4, { marginTop: 1, children: /* @__PURE__ */ jsx4(Text4, { color: "green", children: message }) }),
+    mode === "confirm-mark-all" && /* @__PURE__ */ jsx4(Box4, { marginTop: 1, children: /* @__PURE__ */ jsx4(Text4, { children: "Clear all new video indicators? (y/n)" }) }),
     /* @__PURE__ */ jsx4(StatusBar, { children: mode === "list" && /* @__PURE__ */ jsxs4(Fragment2, { children: [
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "a", description: "dd" }),
       subscriptions.length > 0 && /* @__PURE__ */ jsx4(KeyHint, { keyName: "d", description: "elete" }),
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "v", description: "iew all" }),
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "r", description: "efresh" }),
+      /* @__PURE__ */ jsx4(KeyHint, { keyName: "m", description: "ark all read" }),
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "Enter", description: " browse" }),
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "q", description: "uit" })
     ] }) })
@@ -1065,6 +1106,11 @@ function VideoList({ channel, onBack }) {
       setCurrentPage((p) => p + 1);
     } else if (input === "p" && !channel && currentPage > 0) {
       setCurrentPage((p) => p - 1);
+    } else if (input === "w" && videos.length > 0) {
+      const video = videos[selectedIndex];
+      const nowWatched = toggleWatched(video.id);
+      setWatchedIds(getWatchedIds());
+      setMessage(nowWatched ? "Marked as watched" : "Marked as unwatched");
     } else if (key.upArrow || input === "k") {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === "j") {
@@ -1149,6 +1195,7 @@ function VideoList({ channel, onBack }) {
       /* @__PURE__ */ jsx5(Text5, { color: "gray", children: "  (Enter to confirm, Esc to cancel)" })
     ] }) : /* @__PURE__ */ jsxs5(Fragment3, { children: [
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "Enter", description: " play" }),
+      /* @__PURE__ */ jsx5(KeyHint, { keyName: "w", description: "atched" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "/", description: " filter" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "s", description: hideShorts ? " +shorts" : " -shorts" }),
       !channel && totalPages > 1 && /* @__PURE__ */ jsxs5(Fragment3, { children: [
@@ -1169,7 +1216,9 @@ function App({ initialChannel }) {
   const [screen, setScreen] = useState3(initialChannel ? "videos" : "channels");
   const [selectedChannel, setSelectedChannel] = useState3(initialChannel || null);
   const hasCheckedForNew = useRef2(false);
-  const handleSelectChannel = (channel) => {
+  const savedChannelListIndex = useRef2(0);
+  const handleSelectChannel = (channel, index) => {
+    savedChannelListIndex.current = index;
     setSelectedChannel(channel);
     setScreen("videos");
   };
@@ -1195,7 +1244,8 @@ function App({ initialChannel }) {
         onBrowseAll: handleBrowseAll,
         onQuit: handleQuit,
         skipRefresh: hasCheckedForNew.current,
-        onRefreshDone: markChecked
+        onRefreshDone: markChecked,
+        savedIndex: savedChannelListIndex.current
       }
     ),
     screen === "videos" && /* @__PURE__ */ jsx6(

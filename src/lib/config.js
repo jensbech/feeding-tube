@@ -180,6 +180,26 @@ export function getWatchedIds() {
   return new Set(Object.keys(watched.videos));
 }
 
+/**
+ * Toggle watched status for a video
+ * @param {string} videoId - YouTube video ID
+ * @returns {boolean} New watched state (true = watched, false = unwatched)
+ */
+export function toggleWatched(videoId) {
+  const watched = loadWatched();
+  if (watched.videos[videoId]) {
+    delete watched.videos[videoId];
+    saveWatched(watched);
+    return false;
+  } else {
+    watched.videos[videoId] = {
+      watchedAt: new Date().toISOString(),
+    };
+    saveWatched(watched);
+    return true;
+  }
+}
+
 // ============ Video Store (persistent video history) ============
 
 // In-memory cache
@@ -391,6 +411,22 @@ export function updateChannelLastViewed(channelId) {
     config.channelLastViewed = {};
   }
   config.channelLastViewed[channelId] = new Date().toISOString();
+  saveConfig(config);
+}
+
+/**
+ * Mark all channels as viewed (clears all "new" dots)
+ * @param {Array<string>} channelIds - List of channel IDs to mark as viewed
+ */
+export function markAllChannelsViewed(channelIds) {
+  const config = loadConfig();
+  if (!config.channelLastViewed) {
+    config.channelLastViewed = {};
+  }
+  const now = new Date().toISOString();
+  for (const channelId of channelIds) {
+    config.channelLastViewed[channelId] = now;
+  }
   saveConfig(config);
 }
 
