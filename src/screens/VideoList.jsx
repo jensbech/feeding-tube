@@ -16,14 +16,25 @@ export default function VideoList({ channel, onBack }) {
   const [message, setMessage] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? false);
+  const [filterText, setFilterText] = useState('');
+  const [isFiltering, setIsFiltering] = useState(false);
   
-  // Filter videos based on hideShorts setting
-  const videos = hideShorts ? allVideos.filter((v) => !v.isShort) : allVideos;
+  // Filter videos based on hideShorts and search text
+  const videos = allVideos.filter((v) => {
+    if (hideShorts && v.isShort) return false;
+    if (filterText) {
+      const search = filterText.toLowerCase();
+      return v.title?.toLowerCase().includes(search) || 
+             v.channelName?.toLowerCase().includes(search);
+    }
+    return true;
+  });
   
   const { stdout } = useStdout();
   const terminalHeight = stdout?.rows || 24;
   const terminalWidth = stdout?.columns || 80;
-  const maxVisibleVideos = Math.max(5, terminalHeight - 10);
+  // Cap at 50 or terminal height, whichever is smaller
+  const maxVisibleVideos = Math.min(50, Math.max(5, terminalHeight - 10));
   
   // Calculate scroll offset to keep selection visible
   const scrollOffset = Math.max(0, selectedIndex - maxVisibleVideos + 3);
@@ -80,8 +91,31 @@ export default function VideoList({ channel, onBack }) {
   useInput((input, key) => {
     if (loading || playing) return;
 
+    // Filter mode input handling
+    if (isFiltering) {
+      if (key.escape) {
+        setIsFiltering(false);
+        setFilterText('');
+        setSelectedIndex(0);
+      } else if (key.return) {
+        setIsFiltering(false);
+      } else if (key.backspace || key.delete) {
+        setFilterText((t) => t.slice(0, -1));
+        setSelectedIndex(0);
+      } else if (input && !key.ctrl && !key.meta) {
+        setFilterText((t) => t + input);
+        setSelectedIndex(0);
+      }
+      return;
+    }
+
     if (key.escape || input === 'b') {
-      onBack();
+      if (filterText) {
+        setFilterText('');
+        setSelectedIndex(0);
+      } else {
+        onBack();
+      }
     } else if (input === 'q') {
       process.exit(0);
     } else if (input === 'r') {
@@ -92,6 +126,8 @@ export default function VideoList({ channel, onBack }) {
       updateSettings({ hideShorts: newValue });
       setSelectedIndex(0);
       setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
+    } else if (input === '/') {
+      setIsFiltering(true);
     } else if (key.upArrow || input === 'k') {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === 'j') {
@@ -143,7 +179,8 @@ export default function VideoList({ channel, onBack }) {
   const titleColWidth = availableWidth - 2 - channelColWidth - dateColWidth - 2;
 
   const title = channel ? channel.name : 'All Videos';
-  const subtitle = loading ? 'loading...' : `${videos.length} video${videos.length !== 1 ? 's' : ''}`;
+  const filterInfo = filterText ? ` (filter: "${filterText}")` : '';
+  const subtitle = loading ? 'loading...' : `${videos.length} video${videos.length !== 1 ? 's' : ''}${filterInfo}`;
 
   return (
     <Box flexDirection="column">
@@ -222,11 +259,23 @@ export default function VideoList({ channel, onBack }) {
       )}
 
       <StatusBar>
-        <KeyHint keyName="Enter" description=" play" />
-        <KeyHint keyName="s" description={hideShorts ? " +shorts" : " -shorts"} />
-        <KeyHint keyName="r" description="efresh" />
-        <KeyHint keyName="b" description="ack" />
-        <KeyHint keyName="q" description="uit" />
+        {isFiltering ? (
+          <Text>
+            <Text color="yellow">Filter: </Text>
+            <Text>{filterText}</Text>
+            <Text color="gray">_</Text>
+            <Text color="gray">  (Enter to confirm, Esc to cancel)</Text>
+          </Text>
+        ) : (
+          <>
+            <KeyHint keyName="Enter" description=" play" />
+            <KeyHint keyName="/" description=" filter" />
+            <KeyHint keyName="s" description={hideShorts ? " +shorts" : " -shorts"} />
+            <KeyHint keyName="r" description="efresh" />
+            <KeyHint keyName="b" description="ack" />
+            <KeyHint keyName="q" description="uit" />
+          </>
+        )}
       </StatusBar>
     </Box>
   );

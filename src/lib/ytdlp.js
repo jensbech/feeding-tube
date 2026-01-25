@@ -1,4 +1,5 @@
 import { execa } from 'execa';
+import { storeVideos, getStoredVideos, getAllStoredVideos } from './config.js';
 
 /**
  * Extract channel info from a YouTube URL using yt-dlp
@@ -48,11 +49,39 @@ export async function getChannelInfo(url) {
 }
 
 /**
- * Get latest videos from a channel using RSS (has dates)
+ * Get latest videos from a channel using RSS + stored history
  */
 export async function getChannelVideos(channel, limit = 15) {
-  const videos = await fetchChannelRSS(channel.id, channel.name);
-  return videos.slice(0, limit);
+  // Fetch fresh from RSS
+  const freshVideos = await fetchChannelRSS(channel.id, channel.name);
+  
+  // Store new videos
+  storeVideos(freshVideos);
+  
+  // Get all stored videos for this channel
+  const storedVideos = getStoredVideos(channel.id);
+  
+  // Merge: use stored data but prefer fresh data for duplicates
+  const videoMap = new Map();
+  for (const v of storedVideos) {
+    videoMap.set(v.id, v);
+  }
+  for (const v of freshVideos) {
+    videoMap.set(v.id, v);
+  }
+  
+  // Convert to array, add relative dates, sort by date
+  const allVideos = Array.from(videoMap.values()).map((v) => ({
+    ...v,
+    relativeDate: v.publishedDate ? getRelativeDateFromDate(v.publishedDate) : '',
+  }));
+  
+  allVideos.sort((a, b) => {
+    if (!a.publishedDate || !b.publishedDate) return 0;
+    return b.publishedDate.getTime() - a.publishedDate.getTime();
+  });
+  
+  return allVideos;
 }
 
 /**
@@ -143,7 +172,7 @@ function getRelativeDateFromDate(date) {
 }
 
 /**
- * Get videos from multiple channels using RSS feeds (fast, with proper dates)
+ * Get videos from multiple channels using RSS feeds + stored history
  */
 export async function getAllVideos(subscriptions, limitPerChannel = 15) {
   // Fetch all channels in parallel using RSS
@@ -152,16 +181,39 @@ export async function getAllVideos(subscriptions, limitPerChannel = 15) {
   );
   
   const results = await Promise.all(promises);
-  const allVideos = results.flat();
+  const freshVideos = results.flat();
   
-  // Sort by published date (newest first)
+  // Store new videos
+  storeVideos(freshVideos);
+  
+  // Get all stored videos
+  const storedVideos = getAllStoredVideos();
+  
+  // Filter to only subscribed channels
+  const subscribedIds = new Set(subscriptions.map((s) => s.id));
+  const relevantStored = storedVideos.filter((v) => subscribedIds.has(v.channelId));
+  
+  // Merge: use stored data but prefer fresh data for duplicates
+  const videoMap = new Map();
+  for (const v of relevantStored) {
+    videoMap.set(v.id, v);
+  }
+  for (const v of freshVideos) {
+    videoMap.set(v.id, v);
+  }
+  
+  // Convert to array, add relative dates, sort by date
+  const allVideos = Array.from(videoMap.values()).map((v) => ({
+    ...v,
+    relativeDate: v.publishedDate ? getRelativeDateFromDate(v.publishedDate) : '',
+  }));
+  
   allVideos.sort((a, b) => {
     if (!a.publishedDate || !b.publishedDate) return 0;
     return b.publishedDate.getTime() - a.publishedDate.getTime();
   });
   
-  // Limit total results
-  return allVideos.slice(0, limitPerChannel * subscriptions.length);
+  return allVideos;
 }
 
 /**
@@ -212,4 +264,104 @@ function getRelativeDate(dateStr) {
   
   const date = new Date(year, month, day);
   return getRelativeDateFromDate(date);
+}
+
+/**
+ * Prime historical videos for a channel using yt-dlp
+ * Fetches all videos with full metadata (has dates)
+ * @param {Object} channel - Channel object with id, name, url
+ * @param {Function} onProgress - Callback for progress updates (count, total)
+ * @returns {Promise<{added: number, total: number}>}
+ */
+export async function primeChannel(channel, onProgress) {
+  let url = channel.url;
+  if (!url.includes('/videos')) {
+    url = url.replace(/\/$/, '') + '/videos';
+  }
+  
+  try {
+    // First get list of video IDs (fast)
+    const { stdout: listOut } = await execa('yt-dlp', [
+      '--flat-playlist',
+      '--print', '%(id)s',
+      '--no-warnings',
+      url,
+    ], { timeout: 60000 });
+    
+    const videoIds = listOut.trim().split('\n').filter(Boolean);
+    const total = videoIds.length;
+    let added = 0;
+    let processed = 0;
+    
+    if (onProgress) onProgress(0, total);
+    
+    // Process in parallel batches
+    const concurrency = 10;
+    const batchSize = 5;
+    
+    // Create batches of video IDs
+    const batches = [];
+    for (let i = 0; i < videoIds.length; i += batchSize) {
+      batches.push(videoIds.slice(i, i + batchSize));
+    }
+    
+    // Process batches with limited concurrency
+    for (let i = 0; i < batches.length; i += concurrency) {
+      const concurrentBatches = batches.slice(i, i + concurrency);
+      
+      const results = await Promise.all(
+        concurrentBatches.map(async (batch) => {
+          const urls = batch.map((id) => `https://www.youtube.com/watch?v=${id}`);
+          
+          try {
+            const { stdout } = await execa('yt-dlp', [
+              '--dump-json',
+              '--no-warnings',
+              ...urls,
+            ], { timeout: 180000 });
+            
+            return stdout.trim().split('\n').filter(Boolean).map((line) => {
+              const data = JSON.parse(line);
+              const uploadDate = data.upload_date;
+              const publishedDate = uploadDate ? new Date(
+                parseInt(uploadDate.slice(0, 4), 10),
+                parseInt(uploadDate.slice(4, 6), 10) - 1,
+                parseInt(uploadDate.slice(6, 8), 10)
+              ) : null;
+              
+              const isShort = data.duration <= 60 || data.webpage_url?.includes('/shorts/');
+              
+              return {
+                id: data.id,
+                title: data.title,
+                url: data.webpage_url || `https://www.youtube.com/watch?v=${data.id}`,
+                isShort,
+                duration: data.duration,
+                channelName: channel.name,
+                channelId: channel.id,
+                publishedDate,
+              };
+            });
+          } catch (err) {
+            // Return empty on error, continue with other batches
+            return [];
+          }
+        })
+      );
+      
+      // Store results
+      const videos = results.flat();
+      if (videos.length > 0) {
+        storeVideos(videos);
+        added += videos.length;
+      }
+      
+      processed += concurrentBatches.reduce((sum, b) => sum + b.length, 0);
+      if (onProgress) onProgress(Math.min(processed, total), total);
+    }
+    
+    return { added, total };
+  } catch (error) {
+    throw new Error(`Failed to prime channel: ${error.message}`);
+  }
 }

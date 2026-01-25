@@ -5,16 +5,18 @@ import Header from '../components/Header.jsx';
 import Loading from '../components/Loading.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
 import { getSubscriptions, addSubscription, removeSubscription } from '../lib/config.js';
-import { getChannelInfo } from '../lib/ytdlp.js';
+import { getChannelInfo, primeChannel } from '../lib/ytdlp.js';
 
 export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
   const [subscriptions, setSubscriptions] = useState([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [mode, setMode] = useState('list'); // 'list' | 'add' | 'confirm-delete'
+  const [mode, setMode] = useState('list'); // 'list' | 'add' | 'confirm-delete' | 'confirm-prime'
   const [addUrl, setAddUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
+  const [pendingChannel, setPendingChannel] = useState(null);
 
   // Load subscriptions on mount
   useEffect(() => {
@@ -52,6 +54,16 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       return;
     }
 
+    if (mode === 'confirm-prime') {
+      if (input === 'n' || input === 'N') {
+        setPendingChannel(null);
+        setMode('list');
+      } else if (input === 'y' || input === 'Y' || key.return) {
+        handlePrime();
+      }
+      return;
+    }
+
     // List mode
     if (input === 'q') {
       onQuit();
@@ -80,6 +92,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
     }
 
     setLoading(true);
+    setLoadingMessage('Fetching channel info...');
     setError(null);
 
     try {
@@ -89,15 +102,39 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       if (result.success) {
         setSubscriptions(getSubscriptions());
         setMessage(`Added: ${channelInfo.name}`);
+        setPendingChannel(channelInfo);
+        setMode('confirm-prime');
       } else {
         setError(result.error);
+        setMode('list');
       }
     } catch (err) {
       setError(err.message);
+      setMode('list');
     } finally {
       setLoading(false);
-      setMode('list');
       setAddUrl('');
+    }
+  };
+
+  const handlePrime = async () => {
+    if (!pendingChannel) return;
+    
+    setLoading(true);
+    setLoadingMessage(`Priming ${pendingChannel.name}: 0/?`);
+    setError(null);
+
+    try {
+      const result = await primeChannel(pendingChannel, (done, total) => {
+        setLoadingMessage(`Priming ${pendingChannel.name}: ${done}/${total}`);
+      });
+      setMessage(`Primed ${pendingChannel.name}: ${result.added} videos added`);
+    } catch (err) {
+      setError(`Prime failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+      setPendingChannel(null);
+      setMode('list');
     }
   };
 
@@ -124,7 +161,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
         subtitle={`${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''}`}
       />
 
-      {loading && <Loading message="Fetching channel info..." />}
+      {loading && <Loading message={loadingMessage} />}
 
       {!loading && mode === 'add' && (
         <Box flexDirection="column">
@@ -146,6 +183,15 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
           <Text color="red">
             Delete "{subscriptions[selectedIndex].name}"? (y/N)
           </Text>
+        </Box>
+      )}
+
+      {!loading && mode === 'confirm-prime' && pendingChannel && (
+        <Box flexDirection="column">
+          <Text color="cyan">
+            Prime historical videos for "{pendingChannel.name}"? (Y/n)
+          </Text>
+          <Text color="gray">This fetches all videos from the channel (may take a while)</Text>
         </Box>
       )}
 

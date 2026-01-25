@@ -5,6 +5,7 @@ import { join } from 'path';
 const CONFIG_DIR = join(homedir(), '.config', 'ytsub');
 const CONFIG_FILE = join(CONFIG_DIR, 'subscriptions.json');
 const WATCHED_FILE = join(CONFIG_DIR, 'watched.json');
+const VIDEOS_FILE = join(CONFIG_DIR, 'videos.json');
 
 const DEFAULT_CONFIG = {
   subscriptions: [],
@@ -177,4 +178,86 @@ export function isWatched(videoId) {
 export function getWatchedIds() {
   const watched = loadWatched();
   return new Set(Object.keys(watched.videos));
+}
+
+// ============ Video Store (persistent video history) ============
+
+/**
+ * Load stored videos
+ * Structure: { videos: { [videoId]: { ...videoData } } }
+ */
+export function loadVideoStore() {
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  if (!existsSync(VIDEOS_FILE)) {
+    return { videos: {} };
+  }
+  try {
+    const data = readFileSync(VIDEOS_FILE, 'utf-8');
+    return JSON.parse(data);
+  } catch {
+    return { videos: {} };
+  }
+}
+
+/**
+ * Save video store
+ */
+function saveVideoStore(store) {
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  writeFileSync(VIDEOS_FILE, JSON.stringify(store, null, 2));
+}
+
+/**
+ * Add videos to the store (merges with existing)
+ * @param {Array} videos - Array of video objects
+ */
+export function storeVideos(videos) {
+  const store = loadVideoStore();
+  for (const video of videos) {
+    if (video.id) {
+      // Store essential fields only
+      store.videos[video.id] = {
+        id: video.id,
+        title: video.title,
+        url: video.url,
+        isShort: video.isShort,
+        channelName: video.channelName,
+        channelId: video.channelId,
+        publishedDate: video.publishedDate?.toISOString?.() || video.publishedDate,
+        storedAt: store.videos[video.id]?.storedAt || new Date().toISOString(),
+      };
+    }
+  }
+  saveVideoStore(store);
+}
+
+/**
+ * Get stored videos for a channel
+ * @param {string} channelId - Channel ID
+ * @returns {Array} Array of video objects
+ */
+export function getStoredVideos(channelId) {
+  const store = loadVideoStore();
+  return Object.values(store.videos)
+    .filter((v) => v.channelId === channelId)
+    .map((v) => ({
+      ...v,
+      publishedDate: v.publishedDate ? new Date(v.publishedDate) : null,
+    }));
+}
+
+/**
+ * Get all stored videos
+ * @returns {Array} Array of video objects
+ */
+export function getAllStoredVideos() {
+  const store = loadVideoStore();
+  return Object.values(store.videos).map((v) => ({
+    ...v,
+    publishedDate: v.publishedDate ? new Date(v.publishedDate) : null,
+  }));
 }

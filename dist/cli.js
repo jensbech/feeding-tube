@@ -4,6 +4,7 @@
 import React7 from "react";
 import { render } from "ink";
 import meow from "meow";
+import readline from "readline";
 
 // src/App.jsx
 import React6, { useState as useState3 } from "react";
@@ -84,6 +85,7 @@ import { join } from "path";
 var CONFIG_DIR = join(homedir(), ".config", "ytsub");
 var CONFIG_FILE = join(CONFIG_DIR, "subscriptions.json");
 var WATCHED_FILE = join(CONFIG_DIR, "watched.json");
+var VIDEOS_FILE = join(CONFIG_DIR, "videos.json");
 var DEFAULT_CONFIG = {
   subscriptions: [],
   settings: {
@@ -188,6 +190,58 @@ function getWatchedIds() {
   const watched = loadWatched();
   return new Set(Object.keys(watched.videos));
 }
+function loadVideoStore() {
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  if (!existsSync(VIDEOS_FILE)) {
+    return { videos: {} };
+  }
+  try {
+    const data = readFileSync(VIDEOS_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch {
+    return { videos: {} };
+  }
+}
+function saveVideoStore(store) {
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  writeFileSync(VIDEOS_FILE, JSON.stringify(store, null, 2));
+}
+function storeVideos(videos) {
+  const store = loadVideoStore();
+  for (const video of videos) {
+    if (video.id) {
+      store.videos[video.id] = {
+        id: video.id,
+        title: video.title,
+        url: video.url,
+        isShort: video.isShort,
+        channelName: video.channelName,
+        channelId: video.channelId,
+        publishedDate: video.publishedDate?.toISOString?.() || video.publishedDate,
+        storedAt: store.videos[video.id]?.storedAt || (/* @__PURE__ */ new Date()).toISOString()
+      };
+    }
+  }
+  saveVideoStore(store);
+}
+function getStoredVideos(channelId) {
+  const store = loadVideoStore();
+  return Object.values(store.videos).filter((v) => v.channelId === channelId).map((v) => ({
+    ...v,
+    publishedDate: v.publishedDate ? new Date(v.publishedDate) : null
+  }));
+}
+function getAllStoredVideos() {
+  const store = loadVideoStore();
+  return Object.values(store.videos).map((v) => ({
+    ...v,
+    publishedDate: v.publishedDate ? new Date(v.publishedDate) : null
+  }));
+}
 
 // src/lib/ytdlp.js
 import { execa } from "execa";
@@ -228,8 +282,25 @@ async function getChannelInfo(url) {
   }
 }
 async function getChannelVideos(channel, limit = 15) {
-  const videos = await fetchChannelRSS(channel.id, channel.name);
-  return videos.slice(0, limit);
+  const freshVideos = await fetchChannelRSS(channel.id, channel.name);
+  storeVideos(freshVideos);
+  const storedVideos = getStoredVideos(channel.id);
+  const videoMap = /* @__PURE__ */ new Map();
+  for (const v of storedVideos) {
+    videoMap.set(v.id, v);
+  }
+  for (const v of freshVideos) {
+    videoMap.set(v.id, v);
+  }
+  const allVideos = Array.from(videoMap.values()).map((v) => ({
+    ...v,
+    relativeDate: v.publishedDate ? getRelativeDateFromDate(v.publishedDate) : ""
+  }));
+  allVideos.sort((a, b) => {
+    if (!a.publishedDate || !b.publishedDate) return 0;
+    return b.publishedDate.getTime() - a.publishedDate.getTime();
+  });
+  return allVideos;
 }
 async function fetchChannelRSS(channelId, channelName) {
   try {
@@ -294,12 +365,100 @@ async function getAllVideos(subscriptions, limitPerChannel = 15) {
     (sub) => fetchChannelRSS(sub.id, sub.name)
   );
   const results = await Promise.all(promises);
-  const allVideos = results.flat();
+  const freshVideos = results.flat();
+  storeVideos(freshVideos);
+  const storedVideos = getAllStoredVideos();
+  const subscribedIds = new Set(subscriptions.map((s) => s.id));
+  const relevantStored = storedVideos.filter((v) => subscribedIds.has(v.channelId));
+  const videoMap = /* @__PURE__ */ new Map();
+  for (const v of relevantStored) {
+    videoMap.set(v.id, v);
+  }
+  for (const v of freshVideos) {
+    videoMap.set(v.id, v);
+  }
+  const allVideos = Array.from(videoMap.values()).map((v) => ({
+    ...v,
+    relativeDate: v.publishedDate ? getRelativeDateFromDate(v.publishedDate) : ""
+  }));
   allVideos.sort((a, b) => {
     if (!a.publishedDate || !b.publishedDate) return 0;
     return b.publishedDate.getTime() - a.publishedDate.getTime();
   });
-  return allVideos.slice(0, limitPerChannel * subscriptions.length);
+  return allVideos;
+}
+async function primeChannel(channel, onProgress) {
+  let url = channel.url;
+  if (!url.includes("/videos")) {
+    url = url.replace(/\/$/, "") + "/videos";
+  }
+  try {
+    const { stdout: listOut } = await execa("yt-dlp", [
+      "--flat-playlist",
+      "--print",
+      "%(id)s",
+      "--no-warnings",
+      url
+    ], { timeout: 6e4 });
+    const videoIds = listOut.trim().split("\n").filter(Boolean);
+    const total = videoIds.length;
+    let added = 0;
+    let processed = 0;
+    if (onProgress) onProgress(0, total);
+    const concurrency = 10;
+    const batchSize = 5;
+    const batches = [];
+    for (let i = 0; i < videoIds.length; i += batchSize) {
+      batches.push(videoIds.slice(i, i + batchSize));
+    }
+    for (let i = 0; i < batches.length; i += concurrency) {
+      const concurrentBatches = batches.slice(i, i + concurrency);
+      const results = await Promise.all(
+        concurrentBatches.map(async (batch) => {
+          const urls = batch.map((id) => `https://www.youtube.com/watch?v=${id}`);
+          try {
+            const { stdout } = await execa("yt-dlp", [
+              "--dump-json",
+              "--no-warnings",
+              ...urls
+            ], { timeout: 18e4 });
+            return stdout.trim().split("\n").filter(Boolean).map((line) => {
+              const data = JSON.parse(line);
+              const uploadDate = data.upload_date;
+              const publishedDate = uploadDate ? new Date(
+                parseInt(uploadDate.slice(0, 4), 10),
+                parseInt(uploadDate.slice(4, 6), 10) - 1,
+                parseInt(uploadDate.slice(6, 8), 10)
+              ) : null;
+              const isShort = data.duration <= 60 || data.webpage_url?.includes("/shorts/");
+              return {
+                id: data.id,
+                title: data.title,
+                url: data.webpage_url || `https://www.youtube.com/watch?v=${data.id}`,
+                isShort,
+                duration: data.duration,
+                channelName: channel.name,
+                channelId: channel.id,
+                publishedDate
+              };
+            });
+          } catch (err) {
+            return [];
+          }
+        })
+      );
+      const videos = results.flat();
+      if (videos.length > 0) {
+        storeVideos(videos);
+        added += videos.length;
+      }
+      processed += concurrentBatches.reduce((sum, b) => sum + b.length, 0);
+      if (onProgress) onProgress(Math.min(processed, total), total);
+    }
+    return { added, total };
+  } catch (error) {
+    throw new Error(`Failed to prime channel: ${error.message}`);
+  }
 }
 
 // src/screens/ChannelList.jsx
@@ -310,8 +469,10 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
   const [mode, setMode] = useState("list");
   const [addUrl, setAddUrl] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("");
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
+  const [pendingChannel, setPendingChannel] = useState(null);
   useEffect(() => {
     setSubscriptions(getSubscriptions());
   }, []);
@@ -341,6 +502,15 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       }
       return;
     }
+    if (mode === "confirm-prime") {
+      if (input === "n" || input === "N") {
+        setPendingChannel(null);
+        setMode("list");
+      } else if (input === "y" || input === "Y" || key.return) {
+        handlePrime();
+      }
+      return;
+    }
     if (input === "q") {
       onQuit();
     } else if (input === "a") {
@@ -366,6 +536,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       return;
     }
     setLoading(true);
+    setLoadingMessage("Fetching channel info...");
     setError(null);
     try {
       const channelInfo = await getChannelInfo(url);
@@ -373,15 +544,36 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       if (result.success) {
         setSubscriptions(getSubscriptions());
         setMessage(`Added: ${channelInfo.name}`);
+        setPendingChannel(channelInfo);
+        setMode("confirm-prime");
       } else {
         setError(result.error);
+        setMode("list");
       }
     } catch (err) {
       setError(err.message);
+      setMode("list");
     } finally {
       setLoading(false);
-      setMode("list");
       setAddUrl("");
+    }
+  };
+  const handlePrime = async () => {
+    if (!pendingChannel) return;
+    setLoading(true);
+    setLoadingMessage(`Priming ${pendingChannel.name}: 0/?`);
+    setError(null);
+    try {
+      const result = await primeChannel(pendingChannel, (done, total) => {
+        setLoadingMessage(`Priming ${pendingChannel.name}: ${done}/${total}`);
+      });
+      setMessage(`Primed ${pendingChannel.name}: ${result.added} videos added`);
+    } catch (err) {
+      setError(`Prime failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+      setPendingChannel(null);
+      setMode("list");
     }
   };
   const handleDelete = () => {
@@ -405,7 +597,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
         subtitle: `${subscriptions.length} subscription${subscriptions.length !== 1 ? "s" : ""}`
       }
     ),
-    loading && /* @__PURE__ */ jsx4(Loading, { message: "Fetching channel info..." }),
+    loading && /* @__PURE__ */ jsx4(Loading, { message: loadingMessage }),
     !loading && mode === "add" && /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
       /* @__PURE__ */ jsxs4(Box4, { children: [
         /* @__PURE__ */ jsx4(Text4, { color: "cyan", children: "Enter channel URL: " }),
@@ -426,6 +618,14 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       subscriptions[selectedIndex].name,
       '"? (y/N)'
     ] }) }),
+    !loading && mode === "confirm-prime" && pendingChannel && /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
+      /* @__PURE__ */ jsxs4(Text4, { color: "cyan", children: [
+        'Prime historical videos for "',
+        pendingChannel.name,
+        '"? (Y/n)'
+      ] }),
+      /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "This fetches all videos from the channel (may take a while)" })
+    ] }),
     !loading && mode === "list" && /* @__PURE__ */ jsx4(Box4, { flexDirection: "column", children: subscriptions.length === 0 ? /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
       /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "No subscriptions yet." }),
       /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "Press (a) to add a channel." })
@@ -564,7 +764,7 @@ async function playVideo(videoUrl, videoId) {
 }
 
 // src/screens/VideoList.jsx
-import { jsx as jsx5, jsxs as jsxs5 } from "react/jsx-runtime";
+import { Fragment as Fragment3, jsx as jsx5, jsxs as jsxs5 } from "react/jsx-runtime";
 function VideoList({ channel, onBack }) {
   const [allVideos, setAllVideos] = useState2([]);
   const [watchedIds, setWatchedIds] = useState2(/* @__PURE__ */ new Set());
@@ -574,11 +774,20 @@ function VideoList({ channel, onBack }) {
   const [message, setMessage] = useState2(null);
   const [playing, setPlaying] = useState2(false);
   const [hideShorts, setHideShorts] = useState2(() => getSettings().hideShorts ?? false);
-  const videos = hideShorts ? allVideos.filter((v) => !v.isShort) : allVideos;
+  const [filterText, setFilterText] = useState2("");
+  const [isFiltering, setIsFiltering] = useState2(false);
+  const videos = allVideos.filter((v) => {
+    if (hideShorts && v.isShort) return false;
+    if (filterText) {
+      const search = filterText.toLowerCase();
+      return v.title?.toLowerCase().includes(search) || v.channelName?.toLowerCase().includes(search);
+    }
+    return true;
+  });
   const { stdout } = useStdout3();
   const terminalHeight = stdout?.rows || 24;
   const terminalWidth = stdout?.columns || 80;
-  const maxVisibleVideos = Math.max(5, terminalHeight - 10);
+  const maxVisibleVideos = Math.min(50, Math.max(5, terminalHeight - 10));
   const scrollOffset = Math.max(0, selectedIndex - maxVisibleVideos + 3);
   const visibleVideos = videos.slice(scrollOffset, scrollOffset + maxVisibleVideos);
   const loadVideos = useCallback(async () => {
@@ -621,8 +830,29 @@ function VideoList({ channel, onBack }) {
   }, [message, error]);
   useInput2((input, key) => {
     if (loading || playing) return;
+    if (isFiltering) {
+      if (key.escape) {
+        setIsFiltering(false);
+        setFilterText("");
+        setSelectedIndex(0);
+      } else if (key.return) {
+        setIsFiltering(false);
+      } else if (key.backspace || key.delete) {
+        setFilterText((t) => t.slice(0, -1));
+        setSelectedIndex(0);
+      } else if (input && !key.ctrl && !key.meta) {
+        setFilterText((t) => t + input);
+        setSelectedIndex(0);
+      }
+      return;
+    }
     if (key.escape || input === "b") {
-      onBack();
+      if (filterText) {
+        setFilterText("");
+        setSelectedIndex(0);
+      } else {
+        onBack();
+      }
     } else if (input === "q") {
       process.exit(0);
     } else if (input === "r") {
@@ -633,6 +863,8 @@ function VideoList({ channel, onBack }) {
       updateSettings({ hideShorts: newValue });
       setSelectedIndex(0);
       setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
+    } else if (input === "/") {
+      setIsFiltering(true);
     } else if (key.upArrow || input === "k") {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === "j") {
@@ -670,7 +902,8 @@ function VideoList({ channel, onBack }) {
   const availableWidth = Math.max(terminalWidth - 5, 80);
   const titleColWidth = availableWidth - 2 - channelColWidth - dateColWidth - 2;
   const title = channel ? channel.name : "All Videos";
-  const subtitle = loading ? "loading..." : `${videos.length} video${videos.length !== 1 ? "s" : ""}`;
+  const filterInfo = filterText ? ` (filter: "${filterText}")` : "";
+  const subtitle = loading ? "loading..." : `${videos.length} video${videos.length !== 1 ? "s" : ""}${filterInfo}`;
   return /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", children: [
     /* @__PURE__ */ jsx5(Header, { title, subtitle }),
     loading && /* @__PURE__ */ jsx5(Loading, { message: channel ? `Fetching videos from ${channel.name}...` : "Fetching videos from all channels..." }),
@@ -708,13 +941,19 @@ function VideoList({ channel, onBack }) {
     ] }),
     message && /* @__PURE__ */ jsx5(Box5, { marginTop: 1, children: /* @__PURE__ */ jsx5(Text5, { color: "green", children: message }) }),
     error && videos.length > 0 && /* @__PURE__ */ jsx5(Box5, { marginTop: 1, children: /* @__PURE__ */ jsx5(Text5, { color: "red", children: error }) }),
-    /* @__PURE__ */ jsxs5(StatusBar, { children: [
+    /* @__PURE__ */ jsx5(StatusBar, { children: isFiltering ? /* @__PURE__ */ jsxs5(Text5, { children: [
+      /* @__PURE__ */ jsx5(Text5, { color: "yellow", children: "Filter: " }),
+      /* @__PURE__ */ jsx5(Text5, { children: filterText }),
+      /* @__PURE__ */ jsx5(Text5, { color: "gray", children: "_" }),
+      /* @__PURE__ */ jsx5(Text5, { color: "gray", children: "  (Enter to confirm, Esc to cancel)" })
+    ] }) : /* @__PURE__ */ jsxs5(Fragment3, { children: [
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "Enter", description: " play" }),
+      /* @__PURE__ */ jsx5(KeyHint, { keyName: "/", description: " filter" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "s", description: hideShorts ? " +shorts" : " -shorts" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "r", description: "efresh" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "b", description: "ack" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "q", description: "uit" })
-    ] })
+    ] }) })
   ] });
 }
 
@@ -765,11 +1004,13 @@ var cli = meow(`
     $ ytsub --add <url>        Quick-add a channel
     $ ytsub --list             List subscriptions (non-interactive)
     $ ytsub --channel <index>  Start on a specific channel (by index)
+    $ ytsub --prime [query]    Prime historical videos (all or specific channel)
 
   Options
     --add, -a       Add a channel URL directly
     --list, -l      List all subscriptions
     --channel, -c   Start viewing a specific channel (1-indexed)
+    --prime, -p     Fetch full history (slow, use once per channel)
     --help          Show this help message
     --version       Show version
 
@@ -777,15 +1018,20 @@ var cli = meow(`
     $ ytsub
     $ ytsub --add https://youtube.com/@Fireship
     $ ytsub -c 1
+    $ ytsub --prime            # Prime all channels
+    $ ytsub --prime 3          # Prime channel #3
+    $ ytsub --prime "fireship" # Prime by name
 
   Navigation
     j/k or arrows   Move up/down
     Enter           Select / Play video
+    /               Filter videos
     a               Add subscription
     d               Delete subscription
     v               View all videos
     b / Escape      Go back
     r               Refresh videos
+    s               Toggle Shorts filter
     q               Quit
 `, {
   importMeta: import.meta,
@@ -801,6 +1047,10 @@ var cli = meow(`
     channel: {
       type: "number",
       shortFlag: "c"
+    },
+    prime: {
+      type: "string",
+      shortFlag: "p"
     }
   }
 });
@@ -812,6 +1062,32 @@ async function main() {
       const result = addSubscription(channelInfo);
       if (result.success) {
         console.log(`Added: ${channelInfo.name}`);
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        const answer = await new Promise((resolve) => {
+          rl.question("Prime historical videos? (Y/n) ", resolve);
+        });
+        rl.close();
+        if (answer.toLowerCase() !== "n") {
+          console.log("");
+          process.stdout.write(`${channelInfo.name}: fetching...`);
+          try {
+            const primeResult = await primeChannel(channelInfo, (done, total) => {
+              process.stdout.clearLine(0);
+              process.stdout.cursorTo(0);
+              process.stdout.write(`${channelInfo.name}: ${done}/${total} videos`);
+            });
+            process.stdout.clearLine(0);
+            process.stdout.cursorTo(0);
+            console.log(`${channelInfo.name}: added ${primeResult.added} videos`);
+          } catch (err) {
+            process.stdout.clearLine(0);
+            process.stdout.cursorTo(0);
+            console.log(`${channelInfo.name}: failed - ${err.message}`);
+          }
+        }
       } else {
         console.error(`Error: ${result.error}`);
         process.exit(1);
@@ -833,6 +1109,59 @@ async function main() {
         console.log(`     ${sub.url}`);
       });
     }
+    return;
+  }
+  if (cli.flags.prime !== void 0) {
+    const subs = getSubscriptions();
+    if (subs.length === 0) {
+      console.log("No subscriptions yet. Use --add <url> to add one.");
+      return;
+    }
+    let channelsToPrime = subs;
+    if (cli.flags.prime !== "") {
+      const query = cli.flags.prime;
+      const index = parseInt(query, 10);
+      if (!isNaN(index) && index >= 1 && index <= subs.length) {
+        channelsToPrime = [subs[index - 1]];
+      } else {
+        const search = query.toLowerCase();
+        const matches = subs.filter(
+          (s) => s.name.toLowerCase().includes(search)
+        );
+        if (matches.length === 0) {
+          console.error(`No channel found matching "${query}"`);
+          process.exit(1);
+        } else if (matches.length > 1) {
+          console.log(`Multiple channels match "${query}":`);
+          for (const [i, m] of matches.entries()) {
+            console.log(`  ${i + 1}. ${m.name}`);
+          }
+          console.log("\nBe more specific or use the index number.");
+          process.exit(1);
+        }
+        channelsToPrime = matches;
+      }
+    }
+    console.log(`Priming ${channelsToPrime.length} channel(s) with full history...`);
+    console.log("This may take a while.\n");
+    for (const channel of channelsToPrime) {
+      process.stdout.write(`${channel.name}: fetching...`);
+      try {
+        const result = await primeChannel(channel, (done, total) => {
+          process.stdout.clearLine(0);
+          process.stdout.cursorTo(0);
+          process.stdout.write(`${channel.name}: ${done}/${total} videos`);
+        });
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+        console.log(`${channel.name}: added ${result.added} videos`);
+      } catch (err) {
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+        console.log(`${channel.name}: failed - ${err.message}`);
+      }
+    }
+    console.log("\nDone!");
     return;
   }
   let initialChannel = null;
