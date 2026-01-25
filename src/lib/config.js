@@ -261,3 +261,48 @@ export function getAllStoredVideos() {
     publishedDate: v.publishedDate ? new Date(v.publishedDate) : null,
   }));
 }
+
+// ============ Last Opened Tracking (for "new" indicators) ============
+
+/**
+ * Get the last opened timestamp
+ */
+export function getLastOpened() {
+  const config = loadConfig();
+  return config.lastOpened ? new Date(config.lastOpened) : null;
+}
+
+/**
+ * Update last opened timestamp to now
+ */
+export function updateLastOpened() {
+  const config = loadConfig();
+  config.lastOpened = new Date().toISOString();
+  saveConfig(config);
+}
+
+/**
+ * Count new videos per channel since last opened
+ * @returns {Map<string, number>} Map of channelId -> count of new videos
+ */
+export function getNewVideoCounts() {
+  const lastOpened = getLastOpened();
+  if (!lastOpened) {
+    return new Map();
+  }
+  
+  const store = loadVideoStore();
+  const counts = new Map();
+  
+  for (const video of Object.values(store.videos)) {
+    if (video.publishedDate) {
+      const pubDate = new Date(video.publishedDate);
+      if (pubDate > lastOpened) {
+        const current = counts.get(video.channelId) || 0;
+        counts.set(video.channelId, current + 1);
+      }
+    }
+  }
+  
+  return counts;
+}

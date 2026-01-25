@@ -242,6 +242,33 @@ function getAllStoredVideos() {
     publishedDate: v.publishedDate ? new Date(v.publishedDate) : null
   }));
 }
+function getLastOpened() {
+  const config = loadConfig();
+  return config.lastOpened ? new Date(config.lastOpened) : null;
+}
+function updateLastOpened() {
+  const config = loadConfig();
+  config.lastOpened = (/* @__PURE__ */ new Date()).toISOString();
+  saveConfig(config);
+}
+function getNewVideoCounts() {
+  const lastOpened = getLastOpened();
+  if (!lastOpened) {
+    return /* @__PURE__ */ new Map();
+  }
+  const store = loadVideoStore();
+  const counts = /* @__PURE__ */ new Map();
+  for (const video of Object.values(store.videos)) {
+    if (video.publishedDate) {
+      const pubDate = new Date(video.publishedDate);
+      if (pubDate > lastOpened) {
+        const current = counts.get(video.channelId) || 0;
+        counts.set(video.channelId, current + 1);
+      }
+    }
+  }
+  return counts;
+}
 
 // src/lib/ytdlp.js
 import { execa } from "execa";
@@ -473,8 +500,11 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
   const [pendingChannel, setPendingChannel] = useState(null);
+  const [newCounts, setNewCounts] = useState(/* @__PURE__ */ new Map());
   useEffect(() => {
     setSubscriptions(getSubscriptions());
+    setNewCounts(getNewVideoCounts());
+    updateLastOpened();
   }, []);
   useEffect(() => {
     if (message || error) {
@@ -629,11 +659,17 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
     !loading && mode === "list" && /* @__PURE__ */ jsx4(Box4, { flexDirection: "column", children: subscriptions.length === 0 ? /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
       /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "No subscriptions yet." }),
       /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "Press (a) to add a channel." })
-    ] }) : subscriptions.map((sub, index) => /* @__PURE__ */ jsx4(Box4, { children: /* @__PURE__ */ jsxs4(Text4, { color: index === selectedIndex ? "cyan" : void 0, children: [
-      index === selectedIndex ? ">" : " ",
-      " ",
-      sub.name
-    ] }) }, sub.id || index)) }),
+    ] }) : subscriptions.map((sub, index) => {
+      const hasNew = newCounts.get(sub.id) > 0;
+      return /* @__PURE__ */ jsxs4(Box4, { children: [
+        /* @__PURE__ */ jsxs4(Text4, { color: index === selectedIndex ? "cyan" : void 0, children: [
+          index === selectedIndex ? ">" : " ",
+          " ",
+          sub.name
+        ] }),
+        hasNew && /* @__PURE__ */ jsx4(Text4, { color: "green", children: " \u25CF" })
+      ] }, sub.id || index);
+    }) }),
     error && /* @__PURE__ */ jsx4(Box4, { marginTop: 1, children: /* @__PURE__ */ jsxs4(Text4, { color: "red", children: [
       "Error: ",
       error
