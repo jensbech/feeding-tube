@@ -96,7 +96,11 @@ async function main() {
             });
             process.stdout.clearLine(0);
             process.stdout.cursorTo(0);
-            console.log(`${channelInfo.name}: added ${primeResult.added} videos`);
+            if (primeResult.partial) {
+              console.log(`${channelInfo.name}: added ${primeResult.added} videos (partial - some timed out)`);
+            } else {
+              console.log(`${channelInfo.name}: added ${primeResult.added} videos`);
+            }
           } catch (err) {
             process.stdout.clearLine(0);
             process.stdout.cursorTo(0);
@@ -180,7 +184,11 @@ async function main() {
         });
         process.stdout.clearLine(0);
         process.stdout.cursorTo(0);
-        console.log(`${channel.name}: added ${result.added} videos`);
+        if (result.partial) {
+          console.log(`${channel.name}: added ${result.added} videos (partial - some timed out)`);
+        } else {
+          console.log(`${channel.name}: added ${result.added} videos`);
+        }
       } catch (err) {
         process.stdout.clearLine(0);
         process.stdout.cursorTo(0);

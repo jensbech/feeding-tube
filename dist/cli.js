@@ -504,17 +504,27 @@ async function primeChannel(channel, onProgress) {
   if (!url.includes("/videos")) {
     url = url.replace(/\/$/, "") + "/videos";
   }
+  let added = 0;
+  let total = 0;
+  let partial = false;
   try {
-    const { stdout: listOut } = await execa("yt-dlp", [
-      "--flat-playlist",
-      "--print",
-      "%(id)s",
-      "--no-warnings",
-      url
-    ], { timeout: 6e4 });
-    const videoIds = listOut.trim().split("\n").filter(Boolean);
-    const total = videoIds.length;
-    let added = 0;
+    let videoIds = [];
+    try {
+      const { stdout: listOut } = await execa("yt-dlp", [
+        "--flat-playlist",
+        "--print",
+        "%(id)s",
+        "--no-warnings",
+        url
+      ], { timeout: 12e4 });
+      videoIds = listOut.trim().split("\n").filter(Boolean);
+    } catch (listErr) {
+      if (listErr.timedOut) {
+        return { added: 0, total: 0, partial: true, error: "Timed out fetching video list" };
+      }
+      throw listErr;
+    }
+    total = videoIds.length;
     let processed = 0;
     if (onProgress) onProgress(0, total);
     const concurrency = 10;
@@ -555,6 +565,9 @@ async function primeChannel(channel, onProgress) {
               };
             });
           } catch (err) {
+            if (err.timedOut) {
+              partial = true;
+            }
             return [];
           }
         })
@@ -567,8 +580,11 @@ async function primeChannel(channel, onProgress) {
       processed += concurrentBatches.reduce((sum, b) => sum + b.length, 0);
       if (onProgress) onProgress(Math.min(processed, total), total);
     }
-    return { added, total };
+    return { added, total, partial };
   } catch (error) {
+    if (added > 0) {
+      return { added, total, partial: true, error: error.message };
+    }
     throw new Error(`Failed to prime channel: ${error.message}`);
   }
 }
@@ -711,7 +727,11 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
       const result = await primeChannel(pendingChannel, (done, total) => {
         setLoadingMessage(`Priming ${pendingChannel.name}: ${done}/${total}`);
       });
-      setMessage(`Primed ${pendingChannel.name}: ${result.added} videos added`);
+      if (result.partial) {
+        setMessage(`Primed ${pendingChannel.name}: ${result.added} videos (partial - some timed out)`);
+      } else {
+        setMessage(`Primed ${pendingChannel.name}: ${result.added} videos added`);
+      }
     } catch (err) {
       setError(`Prime failed: ${err.message}`);
     } finally {
@@ -1272,7 +1292,11 @@ async function main() {
             });
             process.stdout.clearLine(0);
             process.stdout.cursorTo(0);
-            console.log(`${channelInfo.name}: added ${primeResult.added} videos`);
+            if (primeResult.partial) {
+              console.log(`${channelInfo.name}: added ${primeResult.added} videos (partial - some timed out)`);
+            } else {
+              console.log(`${channelInfo.name}: added ${primeResult.added} videos`);
+            }
           } catch (err) {
             process.stdout.clearLine(0);
             process.stdout.cursorTo(0);
@@ -1345,7 +1369,11 @@ async function main() {
         });
         process.stdout.clearLine(0);
         process.stdout.cursorTo(0);
-        console.log(`${channel.name}: added ${result.added} videos`);
+        if (result.partial) {
+          console.log(`${channel.name}: added ${result.added} videos (partial - some timed out)`);
+        } else {
+          console.log(`${channel.name}: added ${result.added} videos`);
+        }
       } catch (err) {
         process.stdout.clearLine(0);
         process.stdout.cursorTo(0);

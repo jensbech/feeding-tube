@@ -167,7 +167,11 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
       const result = await primeChannel(pendingChannel, (done, total) => {
         setLoadingMessage(`Priming ${pendingChannel.name}: ${done}/${total}`);
       });
-      setMessage(`Primed ${pendingChannel.name}: ${result.added} videos added`);
+      if (result.partial) {
+        setMessage(`Primed ${pendingChannel.name}: ${result.added} videos (partial - some timed out)`);
+      } else {
+        setMessage(`Primed ${pendingChannel.name}: ${result.added} videos added`);
+      }
     } catch (err) {
       setError(`Prime failed: ${err.message}`);
     } finally {

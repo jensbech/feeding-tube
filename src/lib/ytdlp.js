@@ -355,9 +355,10 @@ function getRelativeDate(dateStr) {
 /**
  * Prime historical videos for a channel using yt-dlp
  * Fetches all videos with full metadata (has dates)
+ * If timeouts occur, returns what was fetched so far instead of failing
  * @param {Object} channel - Channel object with id, name, url
  * @param {Function} onProgress - Callback for progress updates (count, total)
- * @returns {Promise<{added: number, total: number}>}
+ * @returns {Promise<{added: number, total: number, partial: boolean}>}
  */
 export async function primeChannel(channel, onProgress) {
   let url = channel.url;
@@ -365,18 +366,31 @@ export async function primeChannel(channel, onProgress) {
     url = url.replace(/\/$/, '') + '/videos';
   }
   
+  let added = 0;
+  let total = 0;
+  let partial = false;
+  
   try {
     // First get list of video IDs (fast)
-    const { stdout: listOut } = await execa('yt-dlp', [
-      '--flat-playlist',
-      '--print', '%(id)s',
-      '--no-warnings',
-      url,
-    ], { timeout: 60000 });
+    let videoIds = [];
+    try {
+      const { stdout: listOut } = await execa('yt-dlp', [
+        '--flat-playlist',
+        '--print', '%(id)s',
+        '--no-warnings',
+        url,
+      ], { timeout: 120000 });
+      
+      videoIds = listOut.trim().split('\n').filter(Boolean);
+    } catch (listErr) {
+      // If listing times out or fails, we can't continue
+      if (listErr.timedOut) {
+        return { added: 0, total: 0, partial: true, error: 'Timed out fetching video list' };
+      }
+      throw listErr;
+    }
     
-    const videoIds = listOut.trim().split('\n').filter(Boolean);
-    const total = videoIds.length;
-    let added = 0;
+    total = videoIds.length;
     let processed = 0;
     
     if (onProgress) onProgress(0, total);
@@ -429,13 +443,16 @@ export async function primeChannel(channel, onProgress) {
               };
             });
           } catch (err) {
-            // Return empty on error, continue with other batches
+            // Timeout or error on batch - mark as partial but continue
+            if (err.timedOut) {
+              partial = true;
+            }
             return [];
           }
         })
       );
       
-      // Store results
+      // Store results incrementally
       const videos = results.flat();
       if (videos.length > 0) {
         storeVideos(videos);
@@ -446,8 +463,12 @@ export async function primeChannel(channel, onProgress) {
       if (onProgress) onProgress(Math.min(processed, total), total);
     }
     
-    return { added, total };
+    return { added, total, partial };
   } catch (error) {
+    // If we got some videos before the error, return partial success
+    if (added > 0) {
+      return { added, total, partial: true, error: error.message };
+    }
     throw new Error(`Failed to prime channel: ${error.message}`);
   }
 }
