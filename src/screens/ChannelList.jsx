@@ -7,7 +7,7 @@ import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
 import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed } from '../lib/config.js';
 import { getChannelInfo, primeChannel, refreshAllVideos } from '../lib/ytdlp.js';
 
-export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
+export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefreshDone }) {
   const [subscriptions, setSubscriptions] = useState([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [mode, setMode] = useState('list'); // 'list' | 'add' | 'confirm-delete' | 'confirm-prime'
@@ -19,25 +19,27 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
   const [pendingChannel, setPendingChannel] = useState(null);
   const [newCounts, setNewCounts] = useState(new Map());
 
-  // Load subscriptions, prefetch RSS, and check for new videos on mount
+  // Load subscriptions, prefetch RSS (only once per session), and check for new videos
   useEffect(() => {
     const init = async () => {
       const subs = getSubscriptions();
       setSubscriptions(subs);
       
-      // Prefetch RSS to detect new videos
-      if (subs.length > 0) {
+      // Prefetch RSS to detect new videos (only on first mount)
+      if (subs.length > 0 && !skipRefresh) {
         setLoading(true);
         setLoadingMessage('Checking for new videos...');
         await refreshAllVideos(subs);
         setLoading(false);
         setLoadingMessage('');
+        onRefreshDone?.();
       }
       
       // Now counts will include newly fetched videos
       setNewCounts(getNewVideoCounts());
     };
     init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Clear messages after 3 seconds
@@ -91,6 +93,18 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       setMode('confirm-delete');
     } else if (input === 'v') {
       onBrowseAll();
+    } else if (input === 'r' && subscriptions.length > 0) {
+      // Manual refresh
+      const refresh = async () => {
+        setLoading(true);
+        setLoadingMessage('Checking for new videos...');
+        await refreshAllVideos(subscriptions);
+        setNewCounts(getNewVideoCounts());
+        setLoading(false);
+        setLoadingMessage('');
+        setMessage('Refreshed');
+      };
+      refresh();
     } else if (key.upArrow || input === 'k') {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === 'j') {
@@ -261,6 +275,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
             <KeyHint keyName="a" description="dd" />
             {subscriptions.length > 0 && <KeyHint keyName="d" description="elete" />}
             <KeyHint keyName="v" description="iew all" />
+            <KeyHint keyName="r" description="efresh" />
             <KeyHint keyName="Enter" description=" browse" />
             <KeyHint keyName="q" description="uit" />
           </>

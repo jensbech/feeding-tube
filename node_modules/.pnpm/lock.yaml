@@ -9,13 +9,13 @@ importers:
   .:
     dependencies:
       execa:
-        specifier: ^9.5.2
+        specifier: ^9.6.1
         version: 9.6.1
       ink:
-        specifier: ^5.0.1
+        specifier: ^5.2.1
         version: 5.2.1(react@18.3.1)
       ink-select-input:
-        specifier: ^6.0.0
+        specifier: ^6.2.0
         version: 6.2.0(ink@5.2.1(react@18.3.1))(react@18.3.1)
       ink-spinner:
         specifier: ^5.0.0

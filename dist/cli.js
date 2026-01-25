@@ -7,7 +7,7 @@ import meow from "meow";
 import readline from "readline";
 
 // src/App.jsx
-import React6, { useState as useState3 } from "react";
+import React6, { useState as useState3, useRef as useRef2 } from "react";
 import { Box as Box6, useApp } from "ink";
 
 // src/screens/ChannelList.jsx
@@ -575,7 +575,7 @@ async function primeChannel(channel, onProgress) {
 
 // src/screens/ChannelList.jsx
 import { Fragment as Fragment2, jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
-function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
+function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefreshDone }) {
   const [subscriptions, setSubscriptions] = useState([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [mode, setMode] = useState("list");
@@ -590,12 +590,13 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
     const init = async () => {
       const subs = getSubscriptions();
       setSubscriptions(subs);
-      if (subs.length > 0) {
+      if (subs.length > 0 && !skipRefresh) {
         setLoading(true);
         setLoadingMessage("Checking for new videos...");
         await refreshAllVideos(subs);
         setLoading(false);
         setLoadingMessage("");
+        onRefreshDone?.();
       }
       setNewCounts(getNewVideoCounts());
     };
@@ -645,6 +646,17 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       setMode("confirm-delete");
     } else if (input === "v") {
       onBrowseAll();
+    } else if (input === "r" && subscriptions.length > 0) {
+      const refresh = async () => {
+        setLoading(true);
+        setLoadingMessage("Checking for new videos...");
+        await refreshAllVideos(subscriptions);
+        setNewCounts(getNewVideoCounts());
+        setLoading(false);
+        setLoadingMessage("");
+        setMessage("Refreshed");
+      };
+      refresh();
     } else if (key.upArrow || input === "k") {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === "j") {
@@ -781,6 +793,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "a", description: "dd" }),
       subscriptions.length > 0 && /* @__PURE__ */ jsx4(KeyHint, { keyName: "d", description: "elete" }),
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "v", description: "iew all" }),
+      /* @__PURE__ */ jsx4(KeyHint, { keyName: "r", description: "efresh" }),
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "Enter", description: " browse" }),
       /* @__PURE__ */ jsx4(KeyHint, { keyName: "q", description: "uit" })
     ] }) })
@@ -1135,6 +1148,7 @@ function App({ initialChannel }) {
   const { exit } = useApp();
   const [screen, setScreen] = useState3(initialChannel ? "videos" : "channels");
   const [selectedChannel, setSelectedChannel] = useState3(initialChannel || null);
+  const hasCheckedForNew = useRef2(false);
   const handleSelectChannel = (channel) => {
     setSelectedChannel(channel);
     setScreen("videos");
@@ -1150,13 +1164,18 @@ function App({ initialChannel }) {
   const handleQuit = () => {
     exit();
   };
+  const markChecked = () => {
+    hasCheckedForNew.current = true;
+  };
   return /* @__PURE__ */ jsxs6(Box6, { flexDirection: "column", children: [
     screen === "channels" && /* @__PURE__ */ jsx6(
       ChannelList,
       {
         onSelectChannel: handleSelectChannel,
         onBrowseAll: handleBrowseAll,
-        onQuit: handleQuit
+        onQuit: handleQuit,
+        skipRefresh: hasCheckedForNew.current,
+        onRefreshDone: markChecked
       }
     ),
     screen === "videos" && /* @__PURE__ */ jsx6(
