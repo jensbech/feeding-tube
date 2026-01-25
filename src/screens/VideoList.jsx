@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import Header from '../components/Header.jsx';
 import Loading from '../components/Loading.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
-import { getChannelVideos, getAllVideos } from '../lib/ytdlp.js';
+import { getChannelVideos, refreshAllVideos, getVideoPage } from '../lib/ytdlp.js';
 import { getSubscriptions, getSettings, getWatchedIds, updateSettings } from '../lib/config.js';
 import { playVideo } from '../lib/player.js';
 
@@ -18,6 +18,12 @@ export default function VideoList({ channel, onBack }) {
   const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? false);
   const [filterText, setFilterText] = useState('');
   const [isFiltering, setIsFiltering] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [totalVideos, setTotalVideos] = useState(0);
+  const [pageSize, setPageSize] = useState(100);
+  
+  // Cache channel IDs to avoid re-computing
+  const channelIdsRef = useRef(null);
   
   // Filter videos based on hideShorts and search text
   const videos = allVideos.filter((v) => {
@@ -39,12 +45,13 @@ export default function VideoList({ channel, onBack }) {
   // Calculate scroll offset to keep selection visible
   const scrollOffset = Math.max(0, selectedIndex - maxVisibleVideos + 3);
   const visibleVideos = videos.slice(scrollOffset, scrollOffset + maxVisibleVideos);
+  
+  const totalPages = Math.ceil(totalVideos / pageSize);
 
-  const loadVideos = useCallback(async () => {
+  // Initial load: fetch RSS + first page
+  const initialLoad = useCallback(async () => {
     setLoading(true);
     setError(null);
-    
-    // Load watched videos
     setWatchedIds(getWatchedIds());
 
     try {
@@ -52,18 +59,26 @@ export default function VideoList({ channel, onBack }) {
       const limit = settings.videosPerChannel || 15;
 
       if (channel) {
-        // Load videos for specific channel using RSS
+        // Single channel view - use existing flow
         const channelVideos = await getChannelVideos(channel, limit);
         setAllVideos(channelVideos);
+        setTotalVideos(channelVideos.length);
+        setCurrentPage(0);
       } else {
-        // Load videos from all subscriptions
+        // All videos view - fetch RSS once, then paginate from store
         const subscriptions = getSubscriptions();
         if (subscriptions.length === 0) {
           setAllVideos([]);
+          setTotalVideos(0);
           setError('No subscriptions. Go back and add some channels first.');
         } else {
-          const fetchedVideos = await getAllVideos(subscriptions, Math.min(limit, 10));
-          setAllVideos(fetchedVideos);
+          channelIdsRef.current = subscriptions.map((s) => s.id);
+          await refreshAllVideos(subscriptions);
+          const result = getVideoPage(channelIdsRef.current, 0, 100);
+          setAllVideos(result.videos);
+          setTotalVideos(result.total);
+          setPageSize(result.pageSize);
+          setCurrentPage(0);
         }
       }
     } catch (err) {
@@ -73,9 +88,27 @@ export default function VideoList({ channel, onBack }) {
     }
   }, [channel]);
 
+  // Page change: just read from store (fast, no network)
+  const loadPage = useCallback((page) => {
+    if (!channelIdsRef.current || channel) return;
+    
+    const result = getVideoPage(channelIdsRef.current, page, 100);
+    setAllVideos(result.videos);
+    setTotalVideos(result.total);
+    setSelectedIndex(0);
+  }, [channel]);
+
+  // Initial load on mount
   useEffect(() => {
-    loadVideos();
-  }, [loadVideos]);
+    initialLoad();
+  }, [initialLoad]);
+
+  // Handle page changes (fast)
+  useEffect(() => {
+    if (!loading && !channel && channelIdsRef.current && currentPage > 0) {
+      loadPage(currentPage);
+    }
+  }, [currentPage, loading, channel, loadPage]);
 
   // Clear messages after 3 seconds
   useEffect(() => {
@@ -119,7 +152,7 @@ export default function VideoList({ channel, onBack }) {
     } else if (input === 'q') {
       process.exit(0);
     } else if (input === 'r') {
-      loadVideos();
+      initialLoad();
     } else if (input === 's') {
       const newValue = !hideShorts;
       setHideShorts(newValue);
@@ -128,6 +161,12 @@ export default function VideoList({ channel, onBack }) {
       setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
     } else if (input === '/') {
       setIsFiltering(true);
+    } else if (input === 'n' && !channel && currentPage < totalPages - 1) {
+      // Next page (only in "all videos" view)
+      setCurrentPage((p) => p + 1);
+    } else if (input === 'p' && !channel && currentPage > 0) {
+      // Previous page (only in "all videos" view)
+      setCurrentPage((p) => p - 1);
     } else if (key.upArrow || input === 'k') {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === 'j') {
@@ -180,7 +219,8 @@ export default function VideoList({ channel, onBack }) {
 
   const title = channel ? channel.name : 'All Videos';
   const filterInfo = filterText ? ` (filter: "${filterText}")` : '';
-  const subtitle = loading ? 'loading...' : `${videos.length} video${videos.length !== 1 ? 's' : ''}${filterInfo}`;
+  const pageInfo = !channel && totalVideos > 0 ? ` [${currentPage + 1}/${totalPages}]` : '';
+  const subtitle = loading ? 'loading...' : `${videos.length} video${videos.length !== 1 ? 's' : ''}${filterInfo}${pageInfo}`;
 
   return (
     <Box flexDirection="column">
@@ -271,6 +311,12 @@ export default function VideoList({ channel, onBack }) {
             <KeyHint keyName="Enter" description=" play" />
             <KeyHint keyName="/" description=" filter" />
             <KeyHint keyName="s" description={hideShorts ? " +shorts" : " -shorts"} />
+            {!channel && totalPages > 1 && (
+              <>
+                <KeyHint keyName="n" description="ext" />
+                <KeyHint keyName="p" description="rev" />
+              </>
+            )}
             <KeyHint keyName="r" description="efresh" />
             <KeyHint keyName="b" description="ack" />
             <KeyHint keyName="q" description="uit" />

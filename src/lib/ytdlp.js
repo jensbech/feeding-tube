@@ -1,5 +1,5 @@
 import { execa } from 'execa';
-import { storeVideos, getStoredVideos, getAllStoredVideos } from './config.js';
+import { storeVideos, getStoredVideos, getStoredVideosPaginated } from './config.js';
 
 /**
  * Extract channel info from a YouTube URL using yt-dlp
@@ -92,43 +92,98 @@ async function fetchChannelRSS(channelId, channelName) {
     const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
     const { stdout } = await execa('curl', ['-s', rssUrl]);
     
-    // Parse XML manually (simple regex for our needs)
-    const entries = [];
-    const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
-    let match = entryRegex.exec(stdout);
-    
-    while (match !== null) {
-      const entry = match[1];
-      
-      const videoId = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1];
-      const title = entry.match(/<title>([^<]+)<\/title>/)?.[1];
-      const published = entry.match(/<published>([^<]+)<\/published>/)?.[1];
-      const link = entry.match(/<link rel="alternate" href="([^"]+)"\/>/)?.[1];
-      const isShort = link?.includes('/shorts/') ?? false;
-      
-      if (videoId && title) {
-        const publishedDate = published ? new Date(published) : null;
-        entries.push({
-          id: videoId,
-          title: decodeXMLEntities(title),
-          url: link || `https://www.youtube.com/watch?v=${videoId}`,
-          isShort,
-          duration: null,
-          durationString: '--:--',
-          channelName,
-          channelId,
-          publishedDate,
-          uploadDate: publishedDate ? formatDateYYYYMMDD(publishedDate) : null,
-          relativeDate: publishedDate ? getRelativeDateFromDate(publishedDate) : '',
-        });
-      }
-      match = entryRegex.exec(stdout);
-    }
-    
-    return entries;
+    return parseRSSFeed(stdout, channelId, channelName);
   } catch {
     return [];
   }
+}
+
+/**
+ * Fetch RSS feeds for multiple channels in a single curl call
+ * Much faster than spawning separate processes
+ */
+async function fetchAllChannelsRSS(subscriptions) {
+  if (subscriptions.length === 0) return [];
+  
+  try {
+    const urls = subscriptions.map(
+      (sub) => `https://www.youtube.com/feeds/videos.xml?channel_id=${sub.id}`
+    );
+    
+    // Use curl with --parallel for concurrent fetches in single process
+    // -w '\n---BOUNDARY---\n' adds delimiter between responses
+    const { stdout } = await execa('curl', [
+      '-s',
+      '--parallel',
+      '--parallel-max', '20',
+      ...urls.flatMap((url) => ['-o', '-', url]),
+    ], { maxBuffer: 50 * 1024 * 1024 }); // 50MB buffer for large responses
+    
+    // All responses concatenated - split by XML declaration
+    const feeds = stdout.split(/(?=<\?xml)/);
+    
+    const allVideos = [];
+    for (let i = 0; i < feeds.length; i++) {
+      const feed = feeds[i];
+      if (!feed.trim()) continue;
+      
+      // Extract channel ID from feed to match with subscription
+      const feedChannelId = feed.match(/<yt:channelId>([^<]+)<\/yt:channelId>/)?.[1];
+      const sub = subscriptions.find((s) => s.id === feedChannelId);
+      
+      if (sub) {
+        const videos = parseRSSFeed(feed, sub.id, sub.name);
+        allVideos.push(...videos);
+      }
+    }
+    
+    return allVideos;
+  } catch (err) {
+    // Fallback to individual fetches if bulk fails
+    console.error('Bulk RSS fetch failed, falling back to individual:', err.message);
+    const promises = subscriptions.map((sub) => fetchChannelRSS(sub.id, sub.name));
+    const results = await Promise.all(promises);
+    return results.flat();
+  }
+}
+
+/**
+ * Parse RSS feed XML into video objects
+ */
+function parseRSSFeed(xml, channelId, channelName) {
+  const entries = [];
+  const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+  let match = entryRegex.exec(xml);
+  
+  while (match !== null) {
+    const entry = match[1];
+    
+    const videoId = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1];
+    const title = entry.match(/<title>([^<]+)<\/title>/)?.[1];
+    const published = entry.match(/<published>([^<]+)<\/published>/)?.[1];
+    const link = entry.match(/<link rel="alternate" href="([^"]+)"\/>/)?.[1];
+    const isShort = link?.includes('/shorts/') ?? false;
+    
+    if (videoId && title) {
+      const publishedDate = published ? new Date(published) : null;
+      entries.push({
+        id: videoId,
+        title: decodeXMLEntities(title),
+        url: link || `https://www.youtube.com/watch?v=${videoId}`,
+        isShort,
+        duration: null,
+        durationString: '--:--',
+        channelName,
+        channelId,
+        publishedDate,
+        uploadDate: publishedDate ? formatDateYYYYMMDD(publishedDate) : null,
+        relativeDate: publishedDate ? getRelativeDateFromDate(publishedDate) : '',
+      });
+    }
+    match = entryRegex.exec(xml);
+  }
+  
+  return entries;
 }
 
 /**
@@ -172,48 +227,79 @@ function getRelativeDateFromDate(date) {
 }
 
 /**
- * Get videos from multiple channels using RSS feeds + stored history
+ * Refresh videos from RSS feeds for all subscriptions
+ * Call this once on initial load, then use getVideoPage() for pagination
+ * @returns {Promise<number>} Number of new videos added
  */
-export async function getAllVideos(subscriptions, limitPerChannel = 15) {
-  // Fetch all channels in parallel using RSS
-  const promises = subscriptions.map((sub) => 
-    fetchChannelRSS(sub.id, sub.name)
-  );
+export async function refreshAllVideos(subscriptions) {
+  // Use bulk fetch for speed (single curl process)
+  const freshVideos = await fetchAllChannelsRSS(subscriptions);
   
-  const results = await Promise.all(promises);
-  const freshVideos = results.flat();
+  // Store new videos (only writes if there are actually new ones)
+  const newCount = freshVideos.length > 0 ? storeVideos(freshVideos) : 0;
+  return newCount;
+}
+
+/**
+ * Get a page of videos from the store (fast, no network)
+ * @param {Array<string>} channelIds - Channel IDs to filter by
+ * @param {number} page - Page number (0-indexed)
+ * @param {number} pageSize - Videos per page (default 100)
+ * @returns {{ total, page, pageSize, videos }}
+ */
+export function getVideoPage(channelIds, page = 0, pageSize = 100) {
+  const { total, videos } = getStoredVideosPaginated(channelIds, page, pageSize);
   
-  // Store new videos
-  storeVideos(freshVideos);
-  
-  // Get all stored videos
-  const storedVideos = getAllStoredVideos();
-  
-  // Filter to only subscribed channels
-  const subscribedIds = new Set(subscriptions.map((s) => s.id));
-  const relevantStored = storedVideos.filter((v) => subscribedIds.has(v.channelId));
-  
-  // Merge: use stored data but prefer fresh data for duplicates
-  const videoMap = new Map();
-  for (const v of relevantStored) {
-    videoMap.set(v.id, v);
-  }
-  for (const v of freshVideos) {
-    videoMap.set(v.id, v);
-  }
-  
-  // Convert to array, add relative dates, sort by date
-  const allVideos = Array.from(videoMap.values()).map((v) => ({
+  // Add relative dates
+  const videosWithDates = videos.map((v) => ({
     ...v,
     relativeDate: v.publishedDate ? getRelativeDateFromDate(v.publishedDate) : '',
   }));
   
-  allVideos.sort((a, b) => {
-    if (!a.publishedDate || !b.publishedDate) return 0;
-    return b.publishedDate.getTime() - a.publishedDate.getTime();
-  });
+  return {
+    total,
+    page,
+    pageSize,
+    videos: videosWithDates,
+  };
+}
+
+/**
+ * Get videos from multiple channels using RSS feeds + stored history
+ * Returns paginated results: { total, videos }
+ * @deprecated Use refreshAllVideos() + getVideoPage() for better perf
+ */
+export async function getAllVideos(subscriptions, limitPerChannel = 15, page = 0) {
+  const pageSize = 100;
+  const channelIds = subscriptions.map((s) => s.id);
   
-  return allVideos;
+  // Fetch RSS in parallel (quick, ~15 videos per channel)
+  const promises = subscriptions.map((sub) => 
+    fetchChannelRSS(sub.id, sub.name)
+  );
+  const results = await Promise.all(promises);
+  const freshVideos = results.flat();
+  
+  // Store new videos (updates cache + invalidates sorted index)
+  if (freshVideos.length > 0) {
+    storeVideos(freshVideos);
+  }
+  
+  // Use paginated store - already sorted, only loads page needed
+  const { total, videos } = getStoredVideosPaginated(channelIds, page, pageSize);
+  
+  // Add relative dates
+  const videosWithDates = videos.map((v) => ({
+    ...v,
+    relativeDate: v.publishedDate ? getRelativeDateFromDate(v.publishedDate) : '',
+  }));
+  
+  return {
+    total,
+    page,
+    pageSize,
+    videos: videosWithDates,
+  };
 }
 
 /**

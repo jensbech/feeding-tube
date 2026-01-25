@@ -4,8 +4,8 @@ import TextInput from 'ink-text-input';
 import Header from '../components/Header.jsx';
 import Loading from '../components/Loading.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
-import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateLastOpened } from '../lib/config.js';
-import { getChannelInfo, primeChannel } from '../lib/ytdlp.js';
+import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed } from '../lib/config.js';
+import { getChannelInfo, primeChannel, refreshAllVideos } from '../lib/ytdlp.js';
 
 export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
   const [subscriptions, setSubscriptions] = useState([]);
@@ -19,12 +19,25 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
   const [pendingChannel, setPendingChannel] = useState(null);
   const [newCounts, setNewCounts] = useState(new Map());
 
-  // Load subscriptions and new counts on mount, then update lastOpened
+  // Load subscriptions, prefetch RSS, and check for new videos on mount
   useEffect(() => {
-    setSubscriptions(getSubscriptions());
-    setNewCounts(getNewVideoCounts());
-    // Update lastOpened after getting counts so we capture "new" state first
-    updateLastOpened();
+    const init = async () => {
+      const subs = getSubscriptions();
+      setSubscriptions(subs);
+      
+      // Prefetch RSS to detect new videos
+      if (subs.length > 0) {
+        setLoading(true);
+        setLoadingMessage('Checking for new videos...');
+        await refreshAllVideos(subs);
+        setLoading(false);
+        setLoadingMessage('');
+      }
+      
+      // Now counts will include newly fetched videos
+      setNewCounts(getNewVideoCounts());
+    };
+    init();
   }, []);
 
   // Clear messages after 3 seconds
@@ -84,7 +97,15 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       setSelectedIndex((i) => Math.min(subscriptions.length - 1, i + 1));
     } else if (key.return) {
       if (subscriptions.length > 0) {
-        onSelectChannel(subscriptions[selectedIndex]);
+        const channel = subscriptions[selectedIndex];
+        // Mark channel as viewed (clears "new" indicator)
+        updateChannelLastViewed(channel.id);
+        setNewCounts((prev) => {
+          const next = new Map(prev);
+          next.delete(channel.id);
+          return next;
+        });
+        onSelectChannel(channel);
       }
     }
   });

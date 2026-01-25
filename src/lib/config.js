@@ -182,44 +182,110 @@ export function getWatchedIds() {
 
 // ============ Video Store (persistent video history) ============
 
+// In-memory cache
+let videoStoreCache = null;
+let sortedIndexCache = null; // Array of video IDs sorted by date (for "all")
+let filteredIndexCache = null; // { key: string, ids: string[] } for filtered views
+
 /**
- * Load stored videos
+ * Load stored videos (with caching)
  * Structure: { videos: { [videoId]: { ...videoData } } }
  */
 export function loadVideoStore() {
+  if (videoStoreCache) {
+    return videoStoreCache;
+  }
+  
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
   if (!existsSync(VIDEOS_FILE)) {
-    return { videos: {} };
+    videoStoreCache = { videos: {} };
+    return videoStoreCache;
   }
   try {
     const data = readFileSync(VIDEOS_FILE, 'utf-8');
-    return JSON.parse(data);
+    videoStoreCache = JSON.parse(data);
+    return videoStoreCache;
   } catch {
-    return { videos: {} };
+    videoStoreCache = { videos: {} };
+    return videoStoreCache;
   }
 }
 
 /**
- * Save video store
+ * Save video store (also updates cache)
  */
 function saveVideoStore(store) {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
+  videoStoreCache = store;
+  sortedIndexCache = null; // Invalidate sorted index
+  filteredIndexCache = null; // Invalidate filtered index
   writeFileSync(VIDEOS_FILE, JSON.stringify(store, null, 2));
 }
 
 /**
+ * Get or build the sorted index (deferred sorting)
+ * Returns array of video IDs sorted by publishedDate descending
+ */
+function getSortedIndex(channelIds = null) {
+  const store = loadVideoStore();
+  
+  // For filtered views (specific channels)
+  if (channelIds) {
+    const cacheKey = channelIds.slice().sort().join(',');
+    
+    // Return cached if same filter
+    if (filteredIndexCache && filteredIndexCache.key === cacheKey) {
+      return filteredIndexCache.ids;
+    }
+    
+    // Build filtered index with Set for O(1) lookup
+    const channelSet = new Set(channelIds);
+    const filtered = Object.values(store.videos)
+      .filter((v) => channelSet.has(v.channelId))
+      .sort((a, b) => {
+        // Compare ISO strings directly (lexicographic order works for ISO dates)
+        const dateA = a.publishedDate || '';
+        const dateB = b.publishedDate || '';
+        return dateB < dateA ? -1 : dateB > dateA ? 1 : 0;
+      });
+    
+    filteredIndexCache = { key: cacheKey, ids: filtered.map((v) => v.id) };
+    return filteredIndexCache.ids;
+  }
+  
+  // For "all videos", use cached sorted index
+  if (sortedIndexCache) {
+    return sortedIndexCache;
+  }
+  
+  // Build and cache sorted index
+  const allVideos = Object.values(store.videos);
+  allVideos.sort((a, b) => {
+    const dateA = a.publishedDate || '';
+    const dateB = b.publishedDate || '';
+    return dateB < dateA ? -1 : dateB > dateA ? 1 : 0;
+  });
+  sortedIndexCache = allVideos.map((v) => v.id);
+  return sortedIndexCache;
+}
+
+/**
  * Add videos to the store (merges with existing)
+ * Only writes to disk if there are actually new videos
  * @param {Array} videos - Array of video objects
+ * @returns {number} Number of new videos added
  */
 export function storeVideos(videos) {
   const store = loadVideoStore();
+  let newCount = 0;
+  
   for (const video of videos) {
-    if (video.id) {
-      // Store essential fields only
+    if (video.id && !store.videos[video.id]) {
+      // Only add if video doesn't exist
       store.videos[video.id] = {
         id: video.id,
         title: video.title,
@@ -228,11 +294,18 @@ export function storeVideos(videos) {
         channelName: video.channelName,
         channelId: video.channelId,
         publishedDate: video.publishedDate?.toISOString?.() || video.publishedDate,
-        storedAt: store.videos[video.id]?.storedAt || new Date().toISOString(),
+        storedAt: new Date().toISOString(),
       };
+      newCount++;
     }
   }
-  saveVideoStore(store);
+  
+  // Only write to disk and invalidate cache if we added new videos
+  if (newCount > 0) {
+    saveVideoStore(store);
+  }
+  
+  return newCount;
 }
 
 /**
@@ -242,16 +315,19 @@ export function storeVideos(videos) {
  */
 export function getStoredVideos(channelId) {
   const store = loadVideoStore();
-  return Object.values(store.videos)
-    .filter((v) => v.channelId === channelId)
-    .map((v) => ({
+  const sortedIds = getSortedIndex([channelId]);
+  
+  return sortedIds.map((id) => {
+    const v = store.videos[id];
+    return {
       ...v,
       publishedDate: v.publishedDate ? new Date(v.publishedDate) : null,
-    }));
+    };
+  });
 }
 
 /**
- * Get all stored videos
+ * Get all stored videos (deprecated - use paginated version)
  * @returns {Array} Array of video objects
  */
 export function getAllStoredVideos() {
@@ -262,42 +338,77 @@ export function getAllStoredVideos() {
   }));
 }
 
-// ============ Last Opened Tracking (for "new" indicators) ============
+/**
+ * Get paginated stored videos (lazy loading)
+ * @param {Array<string>} channelIds - Filter to these channel IDs (null for all)
+ * @param {number} page - Page number (0-indexed)
+ * @param {number} pageSize - Videos per page
+ * @returns {{ total: number, videos: Array }} Paginated result
+ */
+export function getStoredVideosPaginated(channelIds = null, page = 0, pageSize = 100) {
+  const store = loadVideoStore();
+  const sortedIds = getSortedIndex(channelIds);
+  
+  const start = page * pageSize;
+  const pageIds = sortedIds.slice(start, start + pageSize);
+  
+  const videos = pageIds.map((id) => {
+    const v = store.videos[id];
+    return {
+      ...v,
+      publishedDate: v.publishedDate ? new Date(v.publishedDate) : null,
+    };
+  });
+  
+  return {
+    total: sortedIds.length,
+    page,
+    pageSize,
+    videos,
+  };
+}
+
+// ============ Channel View Tracking (for "new" indicators) ============
 
 /**
- * Get the last opened timestamp
+ * Get the last viewed timestamp for a channel
+ * @param {string} channelId
+ * @returns {Date|null}
  */
-export function getLastOpened() {
+export function getChannelLastViewed(channelId) {
   const config = loadConfig();
-  return config.lastOpened ? new Date(config.lastOpened) : null;
+  const timestamp = config.channelLastViewed?.[channelId];
+  return timestamp ? new Date(timestamp) : null;
 }
 
 /**
- * Update last opened timestamp to now
+ * Update last viewed timestamp for a channel to now
+ * @param {string} channelId
  */
-export function updateLastOpened() {
+export function updateChannelLastViewed(channelId) {
   const config = loadConfig();
-  config.lastOpened = new Date().toISOString();
+  if (!config.channelLastViewed) {
+    config.channelLastViewed = {};
+  }
+  config.channelLastViewed[channelId] = new Date().toISOString();
   saveConfig(config);
 }
 
 /**
- * Count new videos per channel since last opened
+ * Count new videos per channel since each channel was last viewed
  * @returns {Map<string, number>} Map of channelId -> count of new videos
  */
 export function getNewVideoCounts() {
-  const lastOpened = getLastOpened();
-  if (!lastOpened) {
-    return new Map();
-  }
-  
+  const config = loadConfig();
+  const channelLastViewed = config.channelLastViewed || {};
   const store = loadVideoStore();
   const counts = new Map();
   
   for (const video of Object.values(store.videos)) {
-    if (video.publishedDate) {
-      const pubDate = new Date(video.publishedDate);
-      if (pubDate > lastOpened) {
+    if (video.publishedDate && video.channelId) {
+      const lastViewed = channelLastViewed[video.channelId];
+      // If never viewed, or video published after last view
+      if (!lastViewed || video.publishedDate > lastViewed) {
         const current = counts.get(video.channelId) || 0;
         counts.set(video.channelId, current + 1);
       }

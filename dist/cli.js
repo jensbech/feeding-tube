@@ -190,30 +190,71 @@ function getWatchedIds() {
   const watched = loadWatched();
   return new Set(Object.keys(watched.videos));
 }
+var videoStoreCache = null;
+var sortedIndexCache = null;
+var filteredIndexCache = null;
 function loadVideoStore() {
+  if (videoStoreCache) {
+    return videoStoreCache;
+  }
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
   if (!existsSync(VIDEOS_FILE)) {
-    return { videos: {} };
+    videoStoreCache = { videos: {} };
+    return videoStoreCache;
   }
   try {
     const data = readFileSync(VIDEOS_FILE, "utf-8");
-    return JSON.parse(data);
+    videoStoreCache = JSON.parse(data);
+    return videoStoreCache;
   } catch {
-    return { videos: {} };
+    videoStoreCache = { videos: {} };
+    return videoStoreCache;
   }
 }
 function saveVideoStore(store) {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
+  videoStoreCache = store;
+  sortedIndexCache = null;
+  filteredIndexCache = null;
   writeFileSync(VIDEOS_FILE, JSON.stringify(store, null, 2));
+}
+function getSortedIndex(channelIds = null) {
+  const store = loadVideoStore();
+  if (channelIds) {
+    const cacheKey = channelIds.slice().sort().join(",");
+    if (filteredIndexCache && filteredIndexCache.key === cacheKey) {
+      return filteredIndexCache.ids;
+    }
+    const channelSet = new Set(channelIds);
+    const filtered = Object.values(store.videos).filter((v) => channelSet.has(v.channelId)).sort((a, b) => {
+      const dateA = a.publishedDate || "";
+      const dateB = b.publishedDate || "";
+      return dateB < dateA ? -1 : dateB > dateA ? 1 : 0;
+    });
+    filteredIndexCache = { key: cacheKey, ids: filtered.map((v) => v.id) };
+    return filteredIndexCache.ids;
+  }
+  if (sortedIndexCache) {
+    return sortedIndexCache;
+  }
+  const allVideos = Object.values(store.videos);
+  allVideos.sort((a, b) => {
+    const dateA = a.publishedDate || "";
+    const dateB = b.publishedDate || "";
+    return dateB < dateA ? -1 : dateB > dateA ? 1 : 0;
+  });
+  sortedIndexCache = allVideos.map((v) => v.id);
+  return sortedIndexCache;
 }
 function storeVideos(videos) {
   const store = loadVideoStore();
+  let newCount = 0;
   for (const video of videos) {
-    if (video.id) {
+    if (video.id && !store.videos[video.id]) {
       store.videos[video.id] = {
         id: video.id,
         title: video.title,
@@ -222,46 +263,63 @@ function storeVideos(videos) {
         channelName: video.channelName,
         channelId: video.channelId,
         publishedDate: video.publishedDate?.toISOString?.() || video.publishedDate,
-        storedAt: store.videos[video.id]?.storedAt || (/* @__PURE__ */ new Date()).toISOString()
+        storedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
+      newCount++;
     }
   }
-  saveVideoStore(store);
+  if (newCount > 0) {
+    saveVideoStore(store);
+  }
+  return newCount;
 }
 function getStoredVideos(channelId) {
   const store = loadVideoStore();
-  return Object.values(store.videos).filter((v) => v.channelId === channelId).map((v) => ({
-    ...v,
-    publishedDate: v.publishedDate ? new Date(v.publishedDate) : null
-  }));
+  const sortedIds = getSortedIndex([channelId]);
+  return sortedIds.map((id) => {
+    const v = store.videos[id];
+    return {
+      ...v,
+      publishedDate: v.publishedDate ? new Date(v.publishedDate) : null
+    };
+  });
 }
-function getAllStoredVideos() {
+function getStoredVideosPaginated(channelIds = null, page = 0, pageSize = 100) {
   const store = loadVideoStore();
-  return Object.values(store.videos).map((v) => ({
-    ...v,
-    publishedDate: v.publishedDate ? new Date(v.publishedDate) : null
-  }));
+  const sortedIds = getSortedIndex(channelIds);
+  const start = page * pageSize;
+  const pageIds = sortedIds.slice(start, start + pageSize);
+  const videos = pageIds.map((id) => {
+    const v = store.videos[id];
+    return {
+      ...v,
+      publishedDate: v.publishedDate ? new Date(v.publishedDate) : null
+    };
+  });
+  return {
+    total: sortedIds.length,
+    page,
+    pageSize,
+    videos
+  };
 }
-function getLastOpened() {
+function updateChannelLastViewed(channelId) {
   const config = loadConfig();
-  return config.lastOpened ? new Date(config.lastOpened) : null;
-}
-function updateLastOpened() {
-  const config = loadConfig();
-  config.lastOpened = (/* @__PURE__ */ new Date()).toISOString();
+  if (!config.channelLastViewed) {
+    config.channelLastViewed = {};
+  }
+  config.channelLastViewed[channelId] = (/* @__PURE__ */ new Date()).toISOString();
   saveConfig(config);
 }
 function getNewVideoCounts() {
-  const lastOpened = getLastOpened();
-  if (!lastOpened) {
-    return /* @__PURE__ */ new Map();
-  }
+  const config = loadConfig();
+  const channelLastViewed = config.channelLastViewed || {};
   const store = loadVideoStore();
   const counts = /* @__PURE__ */ new Map();
   for (const video of Object.values(store.videos)) {
-    if (video.publishedDate) {
-      const pubDate = new Date(video.publishedDate);
-      if (pubDate > lastOpened) {
+    if (video.publishedDate && video.channelId) {
+      const lastViewed = channelLastViewed[video.channelId];
+      if (!lastViewed || video.publishedDate > lastViewed) {
         const current = counts.get(video.channelId) || 0;
         counts.set(video.channelId, current + 1);
       }
@@ -333,38 +391,74 @@ async function fetchChannelRSS(channelId, channelName) {
   try {
     const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
     const { stdout } = await execa("curl", ["-s", rssUrl]);
-    const entries = [];
-    const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
-    let match = entryRegex.exec(stdout);
-    while (match !== null) {
-      const entry = match[1];
-      const videoId = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1];
-      const title = entry.match(/<title>([^<]+)<\/title>/)?.[1];
-      const published = entry.match(/<published>([^<]+)<\/published>/)?.[1];
-      const link = entry.match(/<link rel="alternate" href="([^"]+)"\/>/)?.[1];
-      const isShort = link?.includes("/shorts/") ?? false;
-      if (videoId && title) {
-        const publishedDate = published ? new Date(published) : null;
-        entries.push({
-          id: videoId,
-          title: decodeXMLEntities(title),
-          url: link || `https://www.youtube.com/watch?v=${videoId}`,
-          isShort,
-          duration: null,
-          durationString: "--:--",
-          channelName,
-          channelId,
-          publishedDate,
-          uploadDate: publishedDate ? formatDateYYYYMMDD(publishedDate) : null,
-          relativeDate: publishedDate ? getRelativeDateFromDate(publishedDate) : ""
-        });
-      }
-      match = entryRegex.exec(stdout);
-    }
-    return entries;
+    return parseRSSFeed(stdout, channelId, channelName);
   } catch {
     return [];
   }
+}
+async function fetchAllChannelsRSS(subscriptions) {
+  if (subscriptions.length === 0) return [];
+  try {
+    const urls = subscriptions.map(
+      (sub) => `https://www.youtube.com/feeds/videos.xml?channel_id=${sub.id}`
+    );
+    const { stdout } = await execa("curl", [
+      "-s",
+      "--parallel",
+      "--parallel-max",
+      "20",
+      ...urls.flatMap((url) => ["-o", "-", url])
+    ], { maxBuffer: 50 * 1024 * 1024 });
+    const feeds = stdout.split(/(?=<\?xml)/);
+    const allVideos = [];
+    for (let i = 0; i < feeds.length; i++) {
+      const feed = feeds[i];
+      if (!feed.trim()) continue;
+      const feedChannelId = feed.match(/<yt:channelId>([^<]+)<\/yt:channelId>/)?.[1];
+      const sub = subscriptions.find((s) => s.id === feedChannelId);
+      if (sub) {
+        const videos = parseRSSFeed(feed, sub.id, sub.name);
+        allVideos.push(...videos);
+      }
+    }
+    return allVideos;
+  } catch (err) {
+    console.error("Bulk RSS fetch failed, falling back to individual:", err.message);
+    const promises = subscriptions.map((sub) => fetchChannelRSS(sub.id, sub.name));
+    const results = await Promise.all(promises);
+    return results.flat();
+  }
+}
+function parseRSSFeed(xml, channelId, channelName) {
+  const entries = [];
+  const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+  let match = entryRegex.exec(xml);
+  while (match !== null) {
+    const entry = match[1];
+    const videoId = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1];
+    const title = entry.match(/<title>([^<]+)<\/title>/)?.[1];
+    const published = entry.match(/<published>([^<]+)<\/published>/)?.[1];
+    const link = entry.match(/<link rel="alternate" href="([^"]+)"\/>/)?.[1];
+    const isShort = link?.includes("/shorts/") ?? false;
+    if (videoId && title) {
+      const publishedDate = published ? new Date(published) : null;
+      entries.push({
+        id: videoId,
+        title: decodeXMLEntities(title),
+        url: link || `https://www.youtube.com/watch?v=${videoId}`,
+        isShort,
+        duration: null,
+        durationString: "--:--",
+        channelName,
+        channelId,
+        publishedDate,
+        uploadDate: publishedDate ? formatDateYYYYMMDD(publishedDate) : null,
+        relativeDate: publishedDate ? getRelativeDateFromDate(publishedDate) : ""
+      });
+    }
+    match = entryRegex.exec(xml);
+  }
+  return entries;
 }
 function decodeXMLEntities(str) {
   return str.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'");
@@ -387,32 +481,23 @@ function getRelativeDateFromDate(date) {
   if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
   return `${Math.floor(diffDays / 365)}y ago`;
 }
-async function getAllVideos(subscriptions, limitPerChannel = 15) {
-  const promises = subscriptions.map(
-    (sub) => fetchChannelRSS(sub.id, sub.name)
-  );
-  const results = await Promise.all(promises);
-  const freshVideos = results.flat();
-  storeVideos(freshVideos);
-  const storedVideos = getAllStoredVideos();
-  const subscribedIds = new Set(subscriptions.map((s) => s.id));
-  const relevantStored = storedVideos.filter((v) => subscribedIds.has(v.channelId));
-  const videoMap = /* @__PURE__ */ new Map();
-  for (const v of relevantStored) {
-    videoMap.set(v.id, v);
-  }
-  for (const v of freshVideos) {
-    videoMap.set(v.id, v);
-  }
-  const allVideos = Array.from(videoMap.values()).map((v) => ({
+async function refreshAllVideos(subscriptions) {
+  const freshVideos = await fetchAllChannelsRSS(subscriptions);
+  const newCount = freshVideos.length > 0 ? storeVideos(freshVideos) : 0;
+  return newCount;
+}
+function getVideoPage(channelIds, page = 0, pageSize = 100) {
+  const { total, videos } = getStoredVideosPaginated(channelIds, page, pageSize);
+  const videosWithDates = videos.map((v) => ({
     ...v,
     relativeDate: v.publishedDate ? getRelativeDateFromDate(v.publishedDate) : ""
   }));
-  allVideos.sort((a, b) => {
-    if (!a.publishedDate || !b.publishedDate) return 0;
-    return b.publishedDate.getTime() - a.publishedDate.getTime();
-  });
-  return allVideos;
+  return {
+    total,
+    page,
+    pageSize,
+    videos: videosWithDates
+  };
 }
 async function primeChannel(channel, onProgress) {
   let url = channel.url;
@@ -502,9 +587,19 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
   const [pendingChannel, setPendingChannel] = useState(null);
   const [newCounts, setNewCounts] = useState(/* @__PURE__ */ new Map());
   useEffect(() => {
-    setSubscriptions(getSubscriptions());
-    setNewCounts(getNewVideoCounts());
-    updateLastOpened();
+    const init = async () => {
+      const subs = getSubscriptions();
+      setSubscriptions(subs);
+      if (subs.length > 0) {
+        setLoading(true);
+        setLoadingMessage("Checking for new videos...");
+        await refreshAllVideos(subs);
+        setLoading(false);
+        setLoadingMessage("");
+      }
+      setNewCounts(getNewVideoCounts());
+    };
+    init();
   }, []);
   useEffect(() => {
     if (message || error) {
@@ -556,7 +651,14 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
       setSelectedIndex((i) => Math.min(subscriptions.length - 1, i + 1));
     } else if (key.return) {
       if (subscriptions.length > 0) {
-        onSelectChannel(subscriptions[selectedIndex]);
+        const channel = subscriptions[selectedIndex];
+        updateChannelLastViewed(channel.id);
+        setNewCounts((prev) => {
+          const next = new Map(prev);
+          next.delete(channel.id);
+          return next;
+        });
+        onSelectChannel(channel);
       }
     }
   });
@@ -686,7 +788,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit }) {
 }
 
 // src/screens/VideoList.jsx
-import React5, { useState as useState2, useEffect as useEffect2, useCallback } from "react";
+import React5, { useState as useState2, useEffect as useEffect2, useCallback, useRef } from "react";
 import { Box as Box5, Text as Text5, useInput as useInput2, useStdout as useStdout3 } from "ink";
 
 // src/lib/player.js
@@ -812,6 +914,10 @@ function VideoList({ channel, onBack }) {
   const [hideShorts, setHideShorts] = useState2(() => getSettings().hideShorts ?? false);
   const [filterText, setFilterText] = useState2("");
   const [isFiltering, setIsFiltering] = useState2(false);
+  const [currentPage, setCurrentPage] = useState2(0);
+  const [totalVideos, setTotalVideos] = useState2(0);
+  const [pageSize, setPageSize] = useState2(100);
+  const channelIdsRef = useRef(null);
   const videos = allVideos.filter((v) => {
     if (hideShorts && v.isShort) return false;
     if (filterText) {
@@ -826,7 +932,8 @@ function VideoList({ channel, onBack }) {
   const maxVisibleVideos = Math.min(50, Math.max(5, terminalHeight - 10));
   const scrollOffset = Math.max(0, selectedIndex - maxVisibleVideos + 3);
   const visibleVideos = videos.slice(scrollOffset, scrollOffset + maxVisibleVideos);
-  const loadVideos = useCallback(async () => {
+  const totalPages = Math.ceil(totalVideos / pageSize);
+  const initialLoad = useCallback(async () => {
     setLoading(true);
     setError(null);
     setWatchedIds(getWatchedIds());
@@ -836,14 +943,22 @@ function VideoList({ channel, onBack }) {
       if (channel) {
         const channelVideos = await getChannelVideos(channel, limit);
         setAllVideos(channelVideos);
+        setTotalVideos(channelVideos.length);
+        setCurrentPage(0);
       } else {
         const subscriptions = getSubscriptions();
         if (subscriptions.length === 0) {
           setAllVideos([]);
+          setTotalVideos(0);
           setError("No subscriptions. Go back and add some channels first.");
         } else {
-          const fetchedVideos = await getAllVideos(subscriptions, Math.min(limit, 10));
-          setAllVideos(fetchedVideos);
+          channelIdsRef.current = subscriptions.map((s) => s.id);
+          await refreshAllVideos(subscriptions);
+          const result = getVideoPage(channelIdsRef.current, 0, 100);
+          setAllVideos(result.videos);
+          setTotalVideos(result.total);
+          setPageSize(result.pageSize);
+          setCurrentPage(0);
         }
       }
     } catch (err) {
@@ -852,9 +967,21 @@ function VideoList({ channel, onBack }) {
       setLoading(false);
     }
   }, [channel]);
+  const loadPage = useCallback((page) => {
+    if (!channelIdsRef.current || channel) return;
+    const result = getVideoPage(channelIdsRef.current, page, 100);
+    setAllVideos(result.videos);
+    setTotalVideos(result.total);
+    setSelectedIndex(0);
+  }, [channel]);
   useEffect2(() => {
-    loadVideos();
-  }, [loadVideos]);
+    initialLoad();
+  }, [initialLoad]);
+  useEffect2(() => {
+    if (!loading && !channel && channelIdsRef.current && currentPage > 0) {
+      loadPage(currentPage);
+    }
+  }, [currentPage, loading, channel, loadPage]);
   useEffect2(() => {
     if (message || error) {
       const timer = setTimeout(() => {
@@ -892,7 +1019,7 @@ function VideoList({ channel, onBack }) {
     } else if (input === "q") {
       process.exit(0);
     } else if (input === "r") {
-      loadVideos();
+      initialLoad();
     } else if (input === "s") {
       const newValue = !hideShorts;
       setHideShorts(newValue);
@@ -901,6 +1028,10 @@ function VideoList({ channel, onBack }) {
       setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
     } else if (input === "/") {
       setIsFiltering(true);
+    } else if (input === "n" && !channel && currentPage < totalPages - 1) {
+      setCurrentPage((p) => p + 1);
+    } else if (input === "p" && !channel && currentPage > 0) {
+      setCurrentPage((p) => p - 1);
     } else if (key.upArrow || input === "k") {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === "j") {
@@ -939,7 +1070,8 @@ function VideoList({ channel, onBack }) {
   const titleColWidth = availableWidth - 2 - channelColWidth - dateColWidth - 2;
   const title = channel ? channel.name : "All Videos";
   const filterInfo = filterText ? ` (filter: "${filterText}")` : "";
-  const subtitle = loading ? "loading..." : `${videos.length} video${videos.length !== 1 ? "s" : ""}${filterInfo}`;
+  const pageInfo = !channel && totalVideos > 0 ? ` [${currentPage + 1}/${totalPages}]` : "";
+  const subtitle = loading ? "loading..." : `${videos.length} video${videos.length !== 1 ? "s" : ""}${filterInfo}${pageInfo}`;
   return /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", children: [
     /* @__PURE__ */ jsx5(Header, { title, subtitle }),
     loading && /* @__PURE__ */ jsx5(Loading, { message: channel ? `Fetching videos from ${channel.name}...` : "Fetching videos from all channels..." }),
@@ -986,6 +1118,10 @@ function VideoList({ channel, onBack }) {
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "Enter", description: " play" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "/", description: " filter" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "s", description: hideShorts ? " +shorts" : " -shorts" }),
+      !channel && totalPages > 1 && /* @__PURE__ */ jsxs5(Fragment3, { children: [
+        /* @__PURE__ */ jsx5(KeyHint, { keyName: "n", description: "ext" }),
+        /* @__PURE__ */ jsx5(KeyHint, { keyName: "p", description: "rev" })
+      ] }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "r", description: "efresh" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "b", description: "ack" }),
       /* @__PURE__ */ jsx5(KeyHint, { keyName: "q", description: "uit" })
