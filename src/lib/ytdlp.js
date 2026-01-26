@@ -353,6 +353,55 @@ function getRelativeDate(dateStr) {
 }
 
 /**
+ * Search YouTube for videos
+ * @param {string} query - Search query
+ * @param {number} limit - Max results (default 20)
+ * @returns {Promise<Array>} Search results
+ */
+export async function searchYouTube(query, limit = 20) {
+  try {
+    const { stdout } = await execa('yt-dlp', [
+      `ytsearch${limit}:${query}`,
+      '--flat-playlist',
+      '--dump-json',
+      '--no-warnings',
+    ], { timeout: 30000 });
+    
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    
+    return lines.map((line) => {
+      const data = JSON.parse(line);
+      
+      // Parse release timestamp if available
+      let publishedDate = null;
+      if (data.release_timestamp) {
+        publishedDate = new Date(data.release_timestamp * 1000);
+      } else if (data.timestamp) {
+        publishedDate = new Date(data.timestamp * 1000);
+      }
+      
+      return {
+        id: data.id,
+        title: data.title,
+        url: data.webpage_url || data.url || `https://www.youtube.com/watch?v=${data.id}`,
+        channelName: data.channel || data.uploader || 'Unknown',
+        channelId: data.channel_id || null,
+        duration: data.duration,
+        durationString: data.duration_string || formatDuration(data.duration),
+        viewCount: data.view_count,
+        publishedDate,
+        relativeDate: publishedDate ? getRelativeDateFromDate(publishedDate) : '',
+      };
+    });
+  } catch (error) {
+    if (error.timedOut) {
+      throw new Error('Search timed out');
+    }
+    throw new Error(`Search failed: ${error.message}`);
+  }
+}
+
+/**
  * Prime historical videos for a channel using yt-dlp
  * Fetches all videos with full metadata (has dates)
  * If timeouts occur, returns what was fetched so far instead of failing
@@ -361,6 +410,7 @@ function getRelativeDate(dateStr) {
  * @returns {Promise<{added: number, total: number, partial: boolean}>}
  */
 export async function primeChannel(channel, onProgress) {
+
   let url = channel.url;
   if (!url.includes('/videos')) {
     url = url.replace(/\/$/, '') + '/videos';

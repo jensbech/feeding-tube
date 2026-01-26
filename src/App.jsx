@@ -2,11 +2,13 @@ import React, { useState, useRef } from 'react';
 import { Box, useApp } from 'ink';
 import ChannelList from './screens/ChannelList.jsx';
 import VideoList from './screens/VideoList.jsx';
+import SearchResults from './screens/SearchResults.jsx';
 
 export default function App({ initialChannel }) {
   const { exit } = useApp();
   const [screen, setScreen] = useState(initialChannel ? 'videos' : 'channels');
   const [selectedChannel, setSelectedChannel] = useState(initialChannel || null);
+  const [searchQuery, setSearchQuery] = useState('');
   const hasCheckedForNew = useRef(false);
   const savedChannelListIndex = useRef(0);
 
@@ -21,9 +23,15 @@ export default function App({ initialChannel }) {
     setScreen('videos');
   };
 
+  const handleGlobalSearch = (query) => {
+    setSearchQuery(query);
+    setScreen('search');
+  };
+
   const handleBack = () => {
     setScreen('channels');
     setSelectedChannel(null);
+    setSearchQuery('');
   };
 
   const handleQuit = () => {
@@ -40,6 +48,7 @@ export default function App({ initialChannel }) {
         <ChannelList
           onSelectChannel={handleSelectChannel}
           onBrowseAll={handleBrowseAll}
+          onGlobalSearch={handleGlobalSearch}
           onQuit={handleQuit}
           skipRefresh={hasCheckedForNew.current}
           onRefreshDone={markChecked}
@@ -49,6 +58,12 @@ export default function App({ initialChannel }) {
       {screen === 'videos' && (
         <VideoList
           channel={selectedChannel}
+          onBack={handleBack}
+        />
+      )}
+      {screen === 'search' && (
+        <SearchResults
+          query={searchQuery}
           onBack={handleBack}
         />
       )}

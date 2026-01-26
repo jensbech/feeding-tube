@@ -1,5 +1,6 @@
 import React from 'react';
 import { render } from 'ink';
+import { MouseProvider } from '@ink-tools/ink-mouse';
 import meow from 'meow';
 import readline from 'readline';
 import App from './App.jsx';
@@ -212,8 +213,32 @@ async function main() {
     }
   }
 
-  // Launch the TUI
-  render(React.createElement(App, { initialChannel }));
+  // Launch the TUI with mouse support
+  // Use alternate screen buffer for accurate mouse positioning
+  // (mouse coords are viewport-relative, so we need a clean slate)
+  process.stdout.write('\x1B[?1049h'); // Switch to alternate screen buffer
+  process.stdout.write('\x1B[H');      // Move cursor to top-left
+
+  // Ensure we restore the screen buffer on exit
+  const restoreScreen = () => {
+    process.stdout.write('\x1B[?1049l');
+  };
+  process.on('exit', restoreScreen);
+  process.on('SIGINT', () => {
+    restoreScreen();
+    process.exit(0);
+  });
+  process.on('SIGTERM', () => {
+    restoreScreen();
+    process.exit(0);
+  });
+
+  // cacheInvalidationMs=0 ensures accurate hit detection with dynamic content
+  render(
+    React.createElement(MouseProvider, { cacheInvalidationMs: 0 },
+      React.createElement(App, { initialChannel })
+    )
+  );
 }
 
 main().catch((err) => {

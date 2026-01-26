@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import Header from '../components/Header.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
+import ClickableRow from '../components/ClickableRow.jsx';
 import { getChannelVideos, refreshAllVideos, getVideoPage } from '../lib/ytdlp.js';
 import { getSubscriptions, getSettings, getWatchedIds, updateSettings, toggleWatched, markChannelAllWatched } from '../lib/config.js';
 import { playVideo } from '../lib/player.js';
@@ -16,7 +17,7 @@ const VideoRow = memo(function VideoRow({
   };
   
   return (
-    <Box>
+    <>
       <Text color={getColor(undefined)} dimColor={isWatched && !isSelected}>
         {pointer} 
       </Text>
@@ -29,7 +30,7 @@ const VideoRow = memo(function VideoRow({
       <Text color={getColor('gray')}>
         {dateText}
       </Text>
-    </Box>
+    </>
   );
 });
 
@@ -274,6 +275,31 @@ export default function VideoList({ channel, onBack }) {
     setPlaying(false);
   };
 
+  // Mouse handlers
+  const handleRowSelect = useCallback((index) => {
+    setSelectedIndex(index);
+  }, []);
+
+  const handleRowActivate = useCallback(async (index) => {
+    if (visibleVideos.length === 0 || playing || loading) return;
+    
+    const video = visibleVideos[index];
+    setSelectedIndex(index);
+    setPlaying(true);
+    setMessage(`Opening: ${video.title}`);
+
+    const result = await playVideo(video.url, video.id);
+    setWatchedIds(getWatchedIds());
+
+    if (result.success) {
+      setMessage(`Playing in ${result.player}`);
+    } else {
+      setError(`Failed to play: ${result.error}`);
+    }
+
+    setPlaying(false);
+  }, [visibleVideos, playing, loading]);
+
   // Truncate or pad text to exact width
   const truncate = (text, maxLen) => {
     if (!text) return '';
@@ -336,16 +362,22 @@ export default function VideoList({ channel, onBack }) {
             const dateText = (isWatched && !isSelected ? '* ' : '  ') + pad(video.relativeDate || '', dateColWidth - 2);
 
             return (
-              <VideoRow
+              <ClickableRow
                 key={video.id}
-                pointer={pointer}
-                channelText={channelText}
-                titleText={titleText}
-                dateText={dateText}
-                isSelected={isSelected}
-                isWatched={isWatched}
-                showChannel={showChannel}
-              />
+                index={index}
+                onSelect={handleRowSelect}
+                onActivate={handleRowActivate}
+              >
+                <VideoRow
+                  pointer={pointer}
+                  channelText={channelText}
+                  titleText={titleText}
+                  dateText={dateText}
+                  isSelected={isSelected}
+                  isWatched={isWatched}
+                  showChannel={showChannel}
+                />
+              </ClickableRow>
             );
           })}
         </Box>
