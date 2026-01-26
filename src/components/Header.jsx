@@ -1,7 +1,8 @@
 import React from 'react';
 import { Box, Text, useStdout } from 'ink';
+import Spinner from 'ink-spinner';
 
-export default function Header({ title, subtitle, hints }) {
+export default function Header({ title, subtitle, hints, loading }) {
   const { stdout } = useStdout();
   const width = Math.max((stdout?.columns || 80) - 5, 60);
   
@@ -17,6 +18,9 @@ export default function Header({ title, subtitle, hints }) {
         )}
         {subtitle && (
           <Text color="gray"> ({subtitle})</Text>
+        )}
+        {loading && (
+          <Text color="cyan"> <Spinner type="dots" /></Text>
         )}
       </Box>
       {hints && (

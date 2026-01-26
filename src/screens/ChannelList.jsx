@@ -1,16 +1,31 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, memo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import Header from '../components/Header.jsx';
-import Loading from '../components/Loading.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
-import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed, markAllChannelsViewed } from '../lib/config.js';
+import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed, markAllChannelsViewed, getFullyWatchedChannels } from '../lib/config.js';
 import { getChannelInfo, primeChannel, refreshAllVideos } from '../lib/ytdlp.js';
+
+// Memoized channel row to reduce re-renders
+const ChannelRow = memo(function ChannelRow({ name, isSelected, hasNew, isFullyWatched }) {
+  return (
+    <Box>
+      <Text 
+        color={isSelected ? 'cyan' : undefined} 
+        dimColor={isFullyWatched && !isSelected}
+      >
+        {isSelected ? '>' : ' '} {name}
+      </Text>
+      {hasNew && <Text color="green"> ●</Text>}
+    </Box>
+  );
+});
 
 export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefreshDone, savedIndex }) {
   const [subscriptions, setSubscriptions] = useState([]);
-  const [selectedIndex, setSelectedIndex] = useState(savedIndex || 0);
-  const [mode, setMode] = useState('list'); // 'list' | 'add' | 'confirm-delete' | 'confirm-prime' | 'confirm-mark-all'
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [page, setPage] = useState(0);
+  const [mode, setMode] = useState('list');
   const [addUrl, setAddUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
@@ -18,25 +33,42 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
   const [message, setMessage] = useState(null);
   const [pendingChannel, setPendingChannel] = useState(null);
   const [newCounts, setNewCounts] = useState(new Map());
+  const [fullyWatched, setFullyWatched] = useState(new Set());
+  
+  const PAGE_SIZE = 30;
+  const totalPages = Math.ceil(subscriptions.length / PAGE_SIZE);
+  const startIdx = page * PAGE_SIZE;
+  const visibleChannels = subscriptions.slice(startIdx, startIdx + PAGE_SIZE);
+  
+  // Restore saved position on mount
+  useEffect(() => {
+    if (savedIndex > 0 && subscriptions.length > 0) {
+      const targetPage = Math.floor(savedIndex / PAGE_SIZE);
+      setPage(targetPage);
+      setSelectedIndex(savedIndex - targetPage * PAGE_SIZE);
+    }
+  }, [savedIndex, subscriptions.length]);
 
   // Load subscriptions, prefetch RSS (only once per session), and check for new videos
   useEffect(() => {
     const init = async () => {
       const subs = getSubscriptions();
       setSubscriptions(subs);
+      setNewCounts(getNewVideoCounts()); // Show existing counts immediately
+      setFullyWatched(getFullyWatchedChannels());
       
-      // Prefetch RSS to detect new videos (only on first mount)
+      // Prefetch RSS to detect new videos (only on first mount) - background load
       if (subs.length > 0 && !skipRefresh) {
         setLoading(true);
-        setLoadingMessage('Checking for new videos...');
+        setLoadingMessage('Refreshing...');
         await refreshAllVideos(subs);
         setLoading(false);
         setLoadingMessage('');
         onRefreshDone?.();
+        // Update counts after fetch
+        setNewCounts(getNewVideoCounts());
+        setFullyWatched(getFullyWatchedChannels());
       }
-      
-      // Now counts will include newly fetched videos
-      setNewCounts(getNewVideoCounts());
     };
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -54,7 +86,9 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
   }, [message, error]);
 
   useInput((input, key) => {
-    if (loading) return;
+    // Allow navigation even during background loading (but not during blocking operations)
+    const blockingLoad = loading && (mode === 'add' || mode === 'confirm-prime');
+    if (blockingLoad) return;
 
     if (mode === 'add') {
       if (key.escape) {
@@ -103,17 +137,18 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
     } else if (input === 'a') {
       setMode('add');
       setAddUrl('');
-    } else if (input === 'd' && subscriptions.length > 0) {
+    } else if (input === 'd' && visibleChannels.length > 0) {
       setMode('confirm-delete');
     } else if (input === 'v') {
       onBrowseAll();
-    } else if (input === 'r' && subscriptions.length > 0) {
-      // Manual refresh
+    } else if (input === 'r' && subscriptions.length > 0 && !loading) {
+      // Manual refresh (only if not already loading)
       const refresh = async () => {
         setLoading(true);
-        setLoadingMessage('Checking for new videos...');
+        setLoadingMessage('Refreshing...');
         await refreshAllVideos(subscriptions);
         setNewCounts(getNewVideoCounts());
+        setFullyWatched(getFullyWatchedChannels());
         setLoading(false);
         setLoadingMessage('');
         setMessage('Refreshed');
@@ -121,13 +156,22 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
       refresh();
     } else if (input === 'm') {
       setMode('confirm-mark-all');
+    } else if (input === 'n' && totalPages > 1 && page < totalPages - 1) {
+      // Next page
+      setPage((p) => p + 1);
+      setSelectedIndex(0);
+    } else if (input === 'p' && totalPages > 1 && page > 0) {
+      // Previous page
+      setPage((p) => p - 1);
+      setSelectedIndex(0);
     } else if (key.upArrow || input === 'k') {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === 'j') {
-      setSelectedIndex((i) => Math.min(subscriptions.length - 1, i + 1));
+      setSelectedIndex((i) => Math.min(visibleChannels.length - 1, i + 1));
     } else if (key.return) {
-      if (subscriptions.length > 0) {
-        const channel = subscriptions[selectedIndex];
+      if (visibleChannels.length > 0) {
+        const channel = visibleChannels[selectedIndex];
+        const globalIndex = startIdx + selectedIndex;
         // Mark channel as viewed (clears "new" indicator)
         updateChannelLastViewed(channel.id);
         setNewCounts((prev) => {
@@ -135,7 +179,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
           next.delete(channel.id);
           return next;
         });
-        onSelectChannel(channel, selectedIndex);
+        onSelectChannel(channel, globalIndex);
       }
     }
   });
@@ -198,10 +242,11 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
   };
 
   const handleDelete = () => {
-    if (subscriptions.length === 0) return;
+    if (visibleChannels.length === 0) return;
 
-    const channel = subscriptions[selectedIndex];
-    const result = removeSubscription(selectedIndex);
+    const channel = visibleChannels[selectedIndex];
+    const globalIndex = startIdx + selectedIndex;
+    const result = removeSubscription(globalIndex);
 
     if (result.success) {
       setSubscriptions(getSubscriptions());
@@ -213,16 +258,20 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
     setMode('list');
   };
 
+  // Build subtitle with optional loading indicator and page info
+  const countText = `${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''}`;
+  const pageInfo = totalPages > 1 ? ` [${page + 1}/${totalPages}]` : '';
+  const subtitle = loading ? `${countText}${pageInfo} - ${loadingMessage}` : `${countText}${pageInfo}`;
+
   return (
     <Box flexDirection="column">
-      <Header
-        title="Channels"
-        subtitle={`${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''}`}
+      <Header 
+        title="Channels" 
+        subtitle={subtitle}
+        loading={loading}
       />
 
-      {loading && <Loading message={loadingMessage} />}
-
-      {!loading && mode === 'add' && (
+      {mode === 'add' && (
         <Box flexDirection="column">
           <Box>
             <Text color="cyan">Enter channel URL: </Text>
@@ -237,15 +286,15 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
         </Box>
       )}
 
-      {!loading && mode === 'confirm-delete' && subscriptions.length > 0 && (
+      {mode === 'confirm-delete' && visibleChannels.length > 0 && (
         <Box flexDirection="column">
           <Text color="red">
-            Delete "{subscriptions[selectedIndex].name}"? (y/N)
+            Delete "{visibleChannels[selectedIndex].name}"? (y/N)
           </Text>
         </Box>
       )}
 
-      {!loading && mode === 'confirm-prime' && pendingChannel && (
+      {mode === 'confirm-prime' && pendingChannel && (
         <Box flexDirection="column">
           <Text color="cyan">
             Prime historical videos for "{pendingChannel.name}"? (Y/n)
@@ -254,7 +303,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
         </Box>
       )}
 
-      {!loading && mode === 'list' && (
+      {mode === 'list' && (
         <Box flexDirection="column">
           {subscriptions.length === 0 ? (
             <Box flexDirection="column">
@@ -262,52 +311,62 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skip
               <Text color="gray">Press (a) to add a channel.</Text>
             </Box>
           ) : (
-            subscriptions.map((sub, index) => {
+            visibleChannels.map((sub, index) => {
               const hasNew = newCounts.get(sub.id) > 0;
+              const isFullyWatched = fullyWatched.has(sub.id);
               return (
-                <Box key={sub.id || index}>
-                  <Text color={index === selectedIndex ? 'cyan' : undefined}>
-                    {index === selectedIndex ? '>' : ' '} {sub.name}
-                  </Text>
-                  {hasNew && <Text color="green"> ●</Text>}
-                </Box>
+                <ChannelRow
+                  key={sub.id}
+                  name={sub.name}
+                  isSelected={index === selectedIndex}
+                  hasNew={hasNew}
+                  isFullyWatched={isFullyWatched}
+                />
               );
             })
           )}
         </Box>
       )}
 
-      {error && (
-        <Box marginTop={1}>
-          <Text color="red">Error: {error}</Text>
+      {mode === 'confirm-mark-all' && (
+        <Box flexDirection="column">
+          <Text>Clear all new video indicators? (y/n)</Text>
         </Box>
       )}
 
-       {message && (
-         <Box marginTop={1}>
-           <Text color="green">{message}</Text>
-         </Box>
-       )}
+      <Box flexDirection="column">
+        {error && (
+          <Box>
+            <Text color="red">Error: {error}</Text>
+          </Box>
+        )}
 
-       {mode === 'confirm-mark-all' && (
-         <Box marginTop={1}>
-           <Text>Clear all new video indicators? (y/n)</Text>
-         </Box>
-       )}
+        {message && (
+          <Box>
+            <Text color="green">{message}</Text>
+          </Box>
+        )}
 
-       <StatusBar>
-         {mode === 'list' && (
-           <>
-             <KeyHint keyName="a" description="dd" />
-             {subscriptions.length > 0 && <KeyHint keyName="d" description="elete" />}
-             <KeyHint keyName="v" description="iew all" />
-             <KeyHint keyName="r" description="efresh" />
-             <KeyHint keyName="m" description="ark all read" />
-             <KeyHint keyName="Enter" description=" browse" />
-             <KeyHint keyName="q" description="uit" />
-           </>
-         )}
-       </StatusBar>
+        <StatusBar>
+          {mode === 'list' && (
+            <>
+              <KeyHint keyName="a" description="dd" />
+              {subscriptions.length > 0 && <KeyHint keyName="d" description="elete" />}
+              <KeyHint keyName="v" description="iew all" />
+              <KeyHint keyName="r" description="efresh" />
+              <KeyHint keyName="m" description="ark all read" />
+              {totalPages > 1 && (
+                <>
+                  <KeyHint keyName="n" description="ext" />
+                  <KeyHint keyName="p" description="rev" />
+                </>
+              )}
+              <KeyHint keyName="Enter" description=" browse" />
+              <KeyHint keyName="q" description="uit" />
+            </>
+          )}
+        </StatusBar>
+      </Box>
     </Box>
   );
 }

@@ -1,25 +1,26 @@
 #!/usr/bin/env node
 
 // src/cli.jsx
-import React7 from "react";
+import React6 from "react";
 import { render } from "ink";
 import meow from "meow";
 import readline from "readline";
 
 // src/App.jsx
-import React6, { useState as useState3, useRef as useRef2 } from "react";
-import { Box as Box6, useApp } from "ink";
+import React5, { useState as useState3, useRef as useRef2 } from "react";
+import { Box as Box5, useApp } from "ink";
 
 // src/screens/ChannelList.jsx
-import React4, { useState, useEffect } from "react";
-import { Box as Box4, Text as Text4, useInput } from "ink";
+import React3, { useState, useEffect, memo } from "react";
+import { Box as Box3, Text as Text3, useInput } from "ink";
 import TextInput from "ink-text-input";
 
 // src/components/Header.jsx
 import React from "react";
 import { Box, Text, useStdout } from "ink";
+import Spinner from "ink-spinner";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
-function Header({ title, subtitle, hints }) {
+function Header({ title, subtitle, hints, loading }) {
   const { stdout } = useStdout();
   const width = Math.max((stdout?.columns || 80) - 5, 60);
   return /* @__PURE__ */ jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [
@@ -33,6 +34,10 @@ function Header({ title, subtitle, hints }) {
         " (",
         subtitle,
         ")"
+      ] }),
+      loading && /* @__PURE__ */ jsxs(Text, { color: "cyan", children: [
+        " ",
+        /* @__PURE__ */ jsx(Spinner, { type: "dots" })
       ] })
     ] }),
     hints && /* @__PURE__ */ jsx(Box, { marginTop: 0, children: /* @__PURE__ */ jsx(Text, { color: "gray", children: hints }) }),
@@ -40,41 +45,26 @@ function Header({ title, subtitle, hints }) {
   ] });
 }
 
-// src/components/Loading.jsx
-import React2 from "react";
-import { Box as Box2, Text as Text2 } from "ink";
-import Spinner from "ink-spinner";
-import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
-function Loading({ message = "Loading..." }) {
-  return /* @__PURE__ */ jsxs2(Box2, { children: [
-    /* @__PURE__ */ jsx2(Text2, { color: "cyan", children: /* @__PURE__ */ jsx2(Spinner, { type: "dots" }) }),
-    /* @__PURE__ */ jsxs2(Text2, { children: [
-      " ",
-      message
-    ] })
-  ] });
-}
-
 // src/components/StatusBar.jsx
-import React3 from "react";
-import { Box as Box3, Text as Text3, useStdout as useStdout2 } from "ink";
-import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+import React2 from "react";
+import { Box as Box2, Text as Text2, useStdout as useStdout2 } from "ink";
+import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
 function StatusBar({ children }) {
   const { stdout } = useStdout2();
   const width = Math.max((stdout?.columns || 80) - 5, 60);
-  return /* @__PURE__ */ jsxs3(Box3, { marginTop: 1, flexDirection: "column", children: [
-    /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsx3(Text3, { color: "gray", children: "\u2500".repeat(width) }) }),
-    /* @__PURE__ */ jsx3(Box3, { children })
+  return /* @__PURE__ */ jsxs2(Box2, { marginTop: 1, flexDirection: "column", children: [
+    /* @__PURE__ */ jsx2(Box2, { children: /* @__PURE__ */ jsx2(Text2, { color: "gray", children: "\u2500".repeat(width) }) }),
+    /* @__PURE__ */ jsx2(Box2, { children })
   ] });
 }
 function KeyHint({ keyName, description }) {
-  return /* @__PURE__ */ jsxs3(Box3, { marginRight: 2, children: [
-    /* @__PURE__ */ jsxs3(Text3, { color: "yellow", children: [
+  return /* @__PURE__ */ jsxs2(Box2, { marginRight: 2, children: [
+    /* @__PURE__ */ jsxs2(Text2, { color: "yellow", children: [
       "(",
       keyName,
       ")"
     ] }),
-    /* @__PURE__ */ jsx3(Text3, { color: "gray", children: description })
+    /* @__PURE__ */ jsx2(Text2, { color: "gray", children: description })
   ] });
 }
 
@@ -203,6 +193,21 @@ function toggleWatched(videoId) {
     saveWatched(watched);
     return true;
   }
+}
+function markChannelAllWatched(videoIds) {
+  const watched = loadWatched();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  let count = 0;
+  for (const videoId of videoIds) {
+    if (!watched.videos[videoId]) {
+      watched.videos[videoId] = { watchedAt: now };
+      count++;
+    }
+  }
+  if (count > 0) {
+    saveWatched(watched);
+  }
+  return count;
 }
 var videoStoreCache = null;
 var sortedIndexCache = null;
@@ -351,6 +356,27 @@ function getNewVideoCounts() {
     }
   }
   return counts;
+}
+function getFullyWatchedChannels() {
+  const store = loadVideoStore();
+  const watched = loadWatched();
+  const watchedIds = new Set(Object.keys(watched.videos));
+  const channelVideos = /* @__PURE__ */ new Map();
+  for (const video of Object.values(store.videos)) {
+    if (video.channelId) {
+      if (!channelVideos.has(video.channelId)) {
+        channelVideos.set(video.channelId, []);
+      }
+      channelVideos.get(video.channelId).push(video.id);
+    }
+  }
+  const fullyWatched = /* @__PURE__ */ new Set();
+  for (const [channelId, videoIds] of channelVideos) {
+    if (videoIds.length > 0 && videoIds.every((id) => watchedIds.has(id))) {
+      fullyWatched.add(channelId);
+    }
+  }
+  return fullyWatched;
 }
 
 // src/lib/ytdlp.js
@@ -615,10 +641,28 @@ async function primeChannel(channel, onProgress) {
 }
 
 // src/screens/ChannelList.jsx
-import { Fragment as Fragment2, jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+var ChannelRow = memo(function ChannelRow2({ name, isSelected, hasNew, isFullyWatched }) {
+  return /* @__PURE__ */ jsxs3(Box3, { children: [
+    /* @__PURE__ */ jsxs3(
+      Text3,
+      {
+        color: isSelected ? "cyan" : void 0,
+        dimColor: isFullyWatched && !isSelected,
+        children: [
+          isSelected ? ">" : " ",
+          " ",
+          name
+        ]
+      }
+    ),
+    hasNew && /* @__PURE__ */ jsx3(Text3, { color: "green", children: " \u25CF" })
+  ] });
+});
 function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefreshDone, savedIndex }) {
   const [subscriptions, setSubscriptions] = useState([]);
-  const [selectedIndex, setSelectedIndex] = useState(savedIndex || 0);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [page, setPage] = useState(0);
   const [mode, setMode] = useState("list");
   const [addUrl, setAddUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -627,19 +671,34 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
   const [message, setMessage] = useState(null);
   const [pendingChannel, setPendingChannel] = useState(null);
   const [newCounts, setNewCounts] = useState(/* @__PURE__ */ new Map());
+  const [fullyWatched, setFullyWatched] = useState(/* @__PURE__ */ new Set());
+  const PAGE_SIZE = 30;
+  const totalPages = Math.ceil(subscriptions.length / PAGE_SIZE);
+  const startIdx = page * PAGE_SIZE;
+  const visibleChannels = subscriptions.slice(startIdx, startIdx + PAGE_SIZE);
+  useEffect(() => {
+    if (savedIndex > 0 && subscriptions.length > 0) {
+      const targetPage = Math.floor(savedIndex / PAGE_SIZE);
+      setPage(targetPage);
+      setSelectedIndex(savedIndex - targetPage * PAGE_SIZE);
+    }
+  }, [savedIndex, subscriptions.length]);
   useEffect(() => {
     const init = async () => {
       const subs = getSubscriptions();
       setSubscriptions(subs);
+      setNewCounts(getNewVideoCounts());
+      setFullyWatched(getFullyWatchedChannels());
       if (subs.length > 0 && !skipRefresh) {
         setLoading(true);
-        setLoadingMessage("Checking for new videos...");
+        setLoadingMessage("Refreshing...");
         await refreshAllVideos(subs);
         setLoading(false);
         setLoadingMessage("");
         onRefreshDone?.();
+        setNewCounts(getNewVideoCounts());
+        setFullyWatched(getFullyWatchedChannels());
       }
-      setNewCounts(getNewVideoCounts());
     };
     init();
   }, []);
@@ -653,7 +712,8 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
     }
   }, [message, error]);
   useInput((input, key) => {
-    if (loading) return;
+    const blockingLoad = loading && (mode === "add" || mode === "confirm-prime");
+    if (blockingLoad) return;
     if (mode === "add") {
       if (key.escape) {
         setMode("list");
@@ -695,16 +755,17 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
     } else if (input === "a") {
       setMode("add");
       setAddUrl("");
-    } else if (input === "d" && subscriptions.length > 0) {
+    } else if (input === "d" && visibleChannels.length > 0) {
       setMode("confirm-delete");
     } else if (input === "v") {
       onBrowseAll();
-    } else if (input === "r" && subscriptions.length > 0) {
+    } else if (input === "r" && subscriptions.length > 0 && !loading) {
       const refresh = async () => {
         setLoading(true);
-        setLoadingMessage("Checking for new videos...");
+        setLoadingMessage("Refreshing...");
         await refreshAllVideos(subscriptions);
         setNewCounts(getNewVideoCounts());
+        setFullyWatched(getFullyWatchedChannels());
         setLoading(false);
         setLoadingMessage("");
         setMessage("Refreshed");
@@ -712,20 +773,27 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
       refresh();
     } else if (input === "m") {
       setMode("confirm-mark-all");
+    } else if (input === "n" && totalPages > 1 && page < totalPages - 1) {
+      setPage((p) => p + 1);
+      setSelectedIndex(0);
+    } else if (input === "p" && totalPages > 1 && page > 0) {
+      setPage((p) => p - 1);
+      setSelectedIndex(0);
     } else if (key.upArrow || input === "k") {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === "j") {
-      setSelectedIndex((i) => Math.min(subscriptions.length - 1, i + 1));
+      setSelectedIndex((i) => Math.min(visibleChannels.length - 1, i + 1));
     } else if (key.return) {
-      if (subscriptions.length > 0) {
-        const channel = subscriptions[selectedIndex];
+      if (visibleChannels.length > 0) {
+        const channel = visibleChannels[selectedIndex];
+        const globalIndex = startIdx + selectedIndex;
         updateChannelLastViewed(channel.id);
         setNewCounts((prev) => {
           const next = new Map(prev);
           next.delete(channel.id);
           return next;
         });
-        onSelectChannel(channel, selectedIndex);
+        onSelectChannel(channel, globalIndex);
       }
     }
   });
@@ -780,9 +848,10 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
     }
   };
   const handleDelete = () => {
-    if (subscriptions.length === 0) return;
-    const channel = subscriptions[selectedIndex];
-    const result = removeSubscription(selectedIndex);
+    if (visibleChannels.length === 0) return;
+    const channel = visibleChannels[selectedIndex];
+    const globalIndex = startIdx + selectedIndex;
+    const result = removeSubscription(globalIndex);
     if (result.success) {
       setSubscriptions(getSubscriptions());
       setMessage(`Removed: ${channel.name}`);
@@ -792,19 +861,22 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
     }
     setMode("list");
   };
-  return /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
-    /* @__PURE__ */ jsx4(
+  const countText = `${subscriptions.length} subscription${subscriptions.length !== 1 ? "s" : ""}`;
+  const pageInfo = totalPages > 1 ? ` [${page + 1}/${totalPages}]` : "";
+  const subtitle = loading ? `${countText}${pageInfo} - ${loadingMessage}` : `${countText}${pageInfo}`;
+  return /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
+    /* @__PURE__ */ jsx3(
       Header,
       {
         title: "Channels",
-        subtitle: `${subscriptions.length} subscription${subscriptions.length !== 1 ? "s" : ""}`
+        subtitle,
+        loading
       }
     ),
-    loading && /* @__PURE__ */ jsx4(Loading, { message: loadingMessage }),
-    !loading && mode === "add" && /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
-      /* @__PURE__ */ jsxs4(Box4, { children: [
-        /* @__PURE__ */ jsx4(Text4, { color: "cyan", children: "Enter channel URL: " }),
-        /* @__PURE__ */ jsx4(
+    mode === "add" && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
+      /* @__PURE__ */ jsxs3(Box3, { children: [
+        /* @__PURE__ */ jsx3(Text3, { color: "cyan", children: "Enter channel URL: " }),
+        /* @__PURE__ */ jsx3(
           TextInput,
           {
             value: addUrl,
@@ -814,56 +886,65 @@ function ChannelList({ onSelectChannel, onBrowseAll, onQuit, skipRefresh, onRefr
           }
         )
       ] }),
-      /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "Press ESC to cancel" })
+      /* @__PURE__ */ jsx3(Text3, { color: "gray", children: "Press ESC to cancel" })
     ] }),
-    !loading && mode === "confirm-delete" && subscriptions.length > 0 && /* @__PURE__ */ jsx4(Box4, { flexDirection: "column", children: /* @__PURE__ */ jsxs4(Text4, { color: "red", children: [
+    mode === "confirm-delete" && visibleChannels.length > 0 && /* @__PURE__ */ jsx3(Box3, { flexDirection: "column", children: /* @__PURE__ */ jsxs3(Text3, { color: "red", children: [
       'Delete "',
-      subscriptions[selectedIndex].name,
+      visibleChannels[selectedIndex].name,
       '"? (y/N)'
     ] }) }),
-    !loading && mode === "confirm-prime" && pendingChannel && /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
-      /* @__PURE__ */ jsxs4(Text4, { color: "cyan", children: [
+    mode === "confirm-prime" && pendingChannel && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
+      /* @__PURE__ */ jsxs3(Text3, { color: "cyan", children: [
         'Prime historical videos for "',
         pendingChannel.name,
         '"? (Y/n)'
       ] }),
-      /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "This fetches all videos from the channel (may take a while)" })
+      /* @__PURE__ */ jsx3(Text3, { color: "gray", children: "This fetches all videos from the channel (may take a while)" })
     ] }),
-    !loading && mode === "list" && /* @__PURE__ */ jsx4(Box4, { flexDirection: "column", children: subscriptions.length === 0 ? /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
-      /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "No subscriptions yet." }),
-      /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "Press (a) to add a channel." })
-    ] }) : subscriptions.map((sub, index) => {
+    mode === "list" && /* @__PURE__ */ jsx3(Box3, { flexDirection: "column", children: subscriptions.length === 0 ? /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
+      /* @__PURE__ */ jsx3(Text3, { color: "gray", children: "No subscriptions yet." }),
+      /* @__PURE__ */ jsx3(Text3, { color: "gray", children: "Press (a) to add a channel." })
+    ] }) : visibleChannels.map((sub, index) => {
       const hasNew = newCounts.get(sub.id) > 0;
-      return /* @__PURE__ */ jsxs4(Box4, { children: [
-        /* @__PURE__ */ jsxs4(Text4, { color: index === selectedIndex ? "cyan" : void 0, children: [
-          index === selectedIndex ? ">" : " ",
-          " ",
-          sub.name
-        ] }),
-        hasNew && /* @__PURE__ */ jsx4(Text4, { color: "green", children: " \u25CF" })
-      ] }, sub.id || index);
+      const isFullyWatched = fullyWatched.has(sub.id);
+      return /* @__PURE__ */ jsx3(
+        ChannelRow,
+        {
+          name: sub.name,
+          isSelected: index === selectedIndex,
+          hasNew,
+          isFullyWatched
+        },
+        sub.id
+      );
     }) }),
-    error && /* @__PURE__ */ jsx4(Box4, { marginTop: 1, children: /* @__PURE__ */ jsxs4(Text4, { color: "red", children: [
-      "Error: ",
-      error
-    ] }) }),
-    message && /* @__PURE__ */ jsx4(Box4, { marginTop: 1, children: /* @__PURE__ */ jsx4(Text4, { color: "green", children: message }) }),
-    mode === "confirm-mark-all" && /* @__PURE__ */ jsx4(Box4, { marginTop: 1, children: /* @__PURE__ */ jsx4(Text4, { children: "Clear all new video indicators? (y/n)" }) }),
-    /* @__PURE__ */ jsx4(StatusBar, { children: mode === "list" && /* @__PURE__ */ jsxs4(Fragment2, { children: [
-      /* @__PURE__ */ jsx4(KeyHint, { keyName: "a", description: "dd" }),
-      subscriptions.length > 0 && /* @__PURE__ */ jsx4(KeyHint, { keyName: "d", description: "elete" }),
-      /* @__PURE__ */ jsx4(KeyHint, { keyName: "v", description: "iew all" }),
-      /* @__PURE__ */ jsx4(KeyHint, { keyName: "r", description: "efresh" }),
-      /* @__PURE__ */ jsx4(KeyHint, { keyName: "m", description: "ark all read" }),
-      /* @__PURE__ */ jsx4(KeyHint, { keyName: "Enter", description: " browse" }),
-      /* @__PURE__ */ jsx4(KeyHint, { keyName: "q", description: "uit" })
-    ] }) })
+    mode === "confirm-mark-all" && /* @__PURE__ */ jsx3(Box3, { flexDirection: "column", children: /* @__PURE__ */ jsx3(Text3, { children: "Clear all new video indicators? (y/n)" }) }),
+    /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
+      error && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "red", children: [
+        "Error: ",
+        error
+      ] }) }),
+      message && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsx3(Text3, { color: "green", children: message }) }),
+      /* @__PURE__ */ jsx3(StatusBar, { children: mode === "list" && /* @__PURE__ */ jsxs3(Fragment2, { children: [
+        /* @__PURE__ */ jsx3(KeyHint, { keyName: "a", description: "dd" }),
+        subscriptions.length > 0 && /* @__PURE__ */ jsx3(KeyHint, { keyName: "d", description: "elete" }),
+        /* @__PURE__ */ jsx3(KeyHint, { keyName: "v", description: "iew all" }),
+        /* @__PURE__ */ jsx3(KeyHint, { keyName: "r", description: "efresh" }),
+        /* @__PURE__ */ jsx3(KeyHint, { keyName: "m", description: "ark all read" }),
+        totalPages > 1 && /* @__PURE__ */ jsxs3(Fragment2, { children: [
+          /* @__PURE__ */ jsx3(KeyHint, { keyName: "n", description: "ext" }),
+          /* @__PURE__ */ jsx3(KeyHint, { keyName: "p", description: "rev" })
+        ] }),
+        /* @__PURE__ */ jsx3(KeyHint, { keyName: "Enter", description: " browse" }),
+        /* @__PURE__ */ jsx3(KeyHint, { keyName: "q", description: "uit" })
+      ] }) })
+    ] })
   ] });
 }
 
 // src/screens/VideoList.jsx
-import React5, { useState as useState2, useEffect as useEffect2, useCallback, useRef } from "react";
-import { Box as Box5, Text as Text5, useInput as useInput2, useStdout as useStdout3 } from "ink";
+import React4, { useState as useState2, useEffect as useEffect2, useCallback, useRef, memo as memo2 } from "react";
+import { Box as Box4, Text as Text4, useInput as useInput2, useStdout as useStdout3 } from "ink";
 
 // src/lib/player.js
 import { execa as execa2 } from "execa";
@@ -976,10 +1057,30 @@ async function playVideo(videoUrl, videoId) {
 }
 
 // src/screens/VideoList.jsx
-import { Fragment as Fragment3, jsx as jsx5, jsxs as jsxs5 } from "react/jsx-runtime";
+import { Fragment as Fragment3, jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
+var VideoRow = memo2(function VideoRow2({
+  pointer,
+  channelText,
+  titleText,
+  dateText,
+  isSelected,
+  isWatched,
+  showChannel
+}) {
+  const getColor = (defaultColor) => {
+    if (isSelected) return "cyan";
+    return defaultColor;
+  };
+  return /* @__PURE__ */ jsxs4(Box4, { children: [
+    /* @__PURE__ */ jsx4(Text4, { color: getColor(void 0), dimColor: isWatched && !isSelected, children: pointer }),
+    showChannel && /* @__PURE__ */ jsx4(Text4, { color: getColor("yellow"), dimColor: isWatched && !isSelected, children: channelText }),
+    /* @__PURE__ */ jsx4(Text4, { color: getColor(void 0), dimColor: isWatched && !isSelected, children: titleText }),
+    /* @__PURE__ */ jsx4(Text4, { color: getColor("gray"), children: dateText })
+  ] });
+});
 function VideoList({ channel, onBack }) {
   const [allVideos, setAllVideos] = useState2([]);
-  const [watchedIds, setWatchedIds] = useState2(/* @__PURE__ */ new Set());
+  const [watchedIds, setWatchedIds] = useState2(() => getWatchedIds());
   const [selectedIndex, setSelectedIndex] = useState2(0);
   const [loading, setLoading] = useState2(true);
   const [error, setError] = useState2(null);
@@ -991,8 +1092,12 @@ function VideoList({ channel, onBack }) {
   const [currentPage, setCurrentPage] = useState2(0);
   const [totalVideos, setTotalVideos] = useState2(0);
   const [pageSize, setPageSize] = useState2(100);
+  const [mode, setMode] = useState2("list");
+  const [displayPage, setDisplayPage] = useState2(0);
   const channelIdsRef = useRef(null);
-  const videos = allVideos.filter((v) => {
+  const { stdout } = useStdout3();
+  const terminalWidth = stdout?.columns || 80;
+  const filteredVideos = allVideos.filter((v) => {
     if (hideShorts && v.isShort) return false;
     if (filterText) {
       const search = filterText.toLowerCase();
@@ -1000,12 +1105,10 @@ function VideoList({ channel, onBack }) {
     }
     return true;
   });
-  const { stdout } = useStdout3();
-  const terminalHeight = stdout?.rows || 24;
-  const terminalWidth = stdout?.columns || 80;
-  const maxVisibleVideos = Math.min(50, Math.max(5, terminalHeight - 10));
-  const scrollOffset = Math.max(0, selectedIndex - maxVisibleVideos + 3);
-  const visibleVideos = videos.slice(scrollOffset, scrollOffset + maxVisibleVideos);
+  const DISPLAY_PAGE_SIZE = 30;
+  const displayTotalPages = Math.ceil(filteredVideos.length / DISPLAY_PAGE_SIZE);
+  const displayStartIdx = displayPage * DISPLAY_PAGE_SIZE;
+  const visibleVideos = filteredVideos.slice(displayStartIdx, displayStartIdx + DISPLAY_PAGE_SIZE);
   const totalPages = Math.ceil(totalVideos / pageSize);
   const initialLoad = useCallback(async () => {
     setLoading(true);
@@ -1066,20 +1169,37 @@ function VideoList({ channel, onBack }) {
     }
   }, [message, error]);
   useInput2((input, key) => {
-    if (loading || playing) return;
+    if (playing) return;
+    const blockingLoad = loading && mode !== "list";
+    if (blockingLoad) return;
     if (isFiltering) {
       if (key.escape) {
         setIsFiltering(false);
         setFilterText("");
         setSelectedIndex(0);
+        setDisplayPage(0);
       } else if (key.return) {
         setIsFiltering(false);
       } else if (key.backspace || key.delete) {
         setFilterText((t) => t.slice(0, -1));
         setSelectedIndex(0);
+        setDisplayPage(0);
       } else if (input && !key.ctrl && !key.meta) {
         setFilterText((t) => t + input);
         setSelectedIndex(0);
+        setDisplayPage(0);
+      }
+      return;
+    }
+    if (mode === "confirm-mark-all") {
+      if (input === "n" || input === "N" || key.escape) {
+        setMode("list");
+      } else if (input === "y" || input === "Y" || key.return) {
+        const videoIds = allVideos.map((v) => v.id);
+        markChannelAllWatched(videoIds);
+        setWatchedIds(getWatchedIds());
+        setMessage(`Marked ${videoIds.length} videos as watched`);
+        setMode("list");
       }
       return;
     }
@@ -1087,41 +1207,60 @@ function VideoList({ channel, onBack }) {
       if (filterText) {
         setFilterText("");
         setSelectedIndex(0);
+        setDisplayPage(0);
       } else {
         onBack();
       }
     } else if (input === "q") {
       process.exit(0);
-    } else if (input === "r") {
+    } else if (input === "r" && !loading) {
+      setDisplayPage(0);
       initialLoad();
     } else if (input === "s") {
       const newValue = !hideShorts;
       setHideShorts(newValue);
       updateSettings({ hideShorts: newValue });
       setSelectedIndex(0);
+      setDisplayPage(0);
       setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
     } else if (input === "/") {
       setIsFiltering(true);
-    } else if (input === "n" && !channel && currentPage < totalPages - 1) {
-      setCurrentPage((p) => p + 1);
-    } else if (input === "p" && !channel && currentPage > 0) {
-      setCurrentPage((p) => p - 1);
-    } else if (input === "w" && videos.length > 0) {
-      const video = videos[selectedIndex];
+    } else if (input === "n") {
+      if (channel) {
+        if (displayPage < displayTotalPages - 1) {
+          setDisplayPage((p) => p + 1);
+          setSelectedIndex(0);
+        }
+      } else if (currentPage < totalPages - 1) {
+        setCurrentPage((p) => p + 1);
+      }
+    } else if (input === "p") {
+      if (channel) {
+        if (displayPage > 0) {
+          setDisplayPage((p) => p - 1);
+          setSelectedIndex(0);
+        }
+      } else if (currentPage > 0) {
+        setCurrentPage((p) => p - 1);
+      }
+    } else if (input === "w" && visibleVideos.length > 0) {
+      const video = visibleVideos[selectedIndex];
       const nowWatched = toggleWatched(video.id);
       setWatchedIds(getWatchedIds());
       setMessage(nowWatched ? "Marked as watched" : "Marked as unwatched");
+    } else if (input === "m" && channel && visibleVideos.length > 0) {
+      setMode("confirm-mark-all");
     } else if (key.upArrow || input === "k") {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow || input === "j") {
-      setSelectedIndex((i) => Math.min(videos.length - 1, i + 1));
-    } else if (key.return) {
+      setSelectedIndex((i) => Math.min(visibleVideos.length - 1, i + 1));
+    } else if (key.return && !loading) {
       handlePlay();
     }
   });
   const handlePlay = async () => {
-    if (videos.length === 0) return;
-    const video = videos[selectedIndex];
+    if (visibleVideos.length === 0) return;
+    const video = visibleVideos[selectedIndex];
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
     const result = await playVideo(video.url, video.id);
@@ -1149,68 +1288,67 @@ function VideoList({ channel, onBack }) {
   const titleColWidth = availableWidth - 2 - channelColWidth - dateColWidth - 2;
   const title = channel ? channel.name : "All Videos";
   const filterInfo = filterText ? ` (filter: "${filterText}")` : "";
-  const pageInfo = !channel && totalVideos > 0 ? ` [${currentPage + 1}/${totalPages}]` : "";
-  const subtitle = loading ? "loading..." : `${videos.length} video${videos.length !== 1 ? "s" : ""}${filterInfo}${pageInfo}`;
-  return /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", children: [
-    /* @__PURE__ */ jsx5(Header, { title, subtitle }),
-    loading && /* @__PURE__ */ jsx5(Loading, { message: channel ? `Fetching videos from ${channel.name}...` : "Fetching videos from all channels..." }),
-    !loading && error && !videos.length && /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsx5(Text5, { color: "red", children: error }) }),
-    !loading && videos.length === 0 && !error && /* @__PURE__ */ jsx5(Text5, { color: "gray", children: "No videos found." }),
-    !loading && videos.length > 0 && /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", children: [
-      visibleVideos.map((video, displayIndex) => {
-        const actualIndex = displayIndex + scrollOffset;
-        const isSelected = actualIndex === selectedIndex;
-        const isWatched = watchedIds.has(video.id);
-        const getColor = (defaultColor) => {
-          if (isSelected) return "cyan";
-          if (isWatched) return defaultColor;
-          return defaultColor;
-        };
-        const pointer = isSelected ? ">" : " ";
-        const channelText = showChannel ? pad(truncate(video.channelName, channelColWidth - 1), channelColWidth) : "";
-        const titleText = pad(truncate(video.title, titleColWidth - 1), titleColWidth);
-        const dateText = (isWatched && !isSelected ? "* " : "  ") + pad(video.relativeDate || "", dateColWidth - 2);
-        return /* @__PURE__ */ jsxs5(Box5, { children: [
-          /* @__PURE__ */ jsx5(Text5, { color: getColor(void 0), dimColor: isWatched && !isSelected, children: pointer }),
-          showChannel && /* @__PURE__ */ jsx5(Text5, { color: getColor("yellow"), dimColor: isWatched && !isSelected, children: channelText }),
-          /* @__PURE__ */ jsx5(Text5, { color: getColor(void 0), dimColor: isWatched && !isSelected, children: titleText }),
-          /* @__PURE__ */ jsx5(Text5, { color: getColor("gray"), children: dateText })
-        ] }, video.id || actualIndex);
-      }),
-      videos.length > maxVisibleVideos && /* @__PURE__ */ jsx5(Box5, { marginTop: 1, children: /* @__PURE__ */ jsxs5(Text5, { color: "gray", children: [
-        "Showing ",
-        scrollOffset + 1,
-        "-",
-        Math.min(scrollOffset + maxVisibleVideos, videos.length),
-        " of ",
-        videos.length
+  const pageInfo = channel ? displayTotalPages > 1 ? ` [${displayPage + 1}/${displayTotalPages}]` : "" : totalVideos > 0 ? ` [${currentPage + 1}/${totalPages}]` : "";
+  const loadingInfo = loading ? " - Refreshing..." : "";
+  const subtitle = `${filteredVideos.length} video${filteredVideos.length !== 1 ? "s" : ""}${filterInfo}${pageInfo}${loadingInfo}`;
+  return /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
+    /* @__PURE__ */ jsx4(Header, { title, subtitle, loading }),
+    mode === "confirm-mark-all" && /* @__PURE__ */ jsx4(Box4, { children: /* @__PURE__ */ jsxs4(Text4, { children: [
+      "Mark all ",
+      allVideos.length,
+      " videos as watched? (y/n)"
+    ] }) }),
+    error && !filteredVideos.length && /* @__PURE__ */ jsx4(Box4, { children: /* @__PURE__ */ jsx4(Text4, { color: "red", children: error }) }),
+    !loading && filteredVideos.length === 0 && !error && /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "No videos found." }),
+    filteredVideos.length > 0 && /* @__PURE__ */ jsx4(Box4, { flexDirection: "column", children: visibleVideos.map((video, index) => {
+      const isSelected = index === selectedIndex;
+      const isWatched = watchedIds.has(video.id);
+      const pointer = isSelected ? ">" : " ";
+      const channelText = showChannel ? pad(truncate(video.channelName, channelColWidth - 1), channelColWidth) : "";
+      const titleText = pad(truncate(video.title, titleColWidth - 1), titleColWidth);
+      const dateText = (isWatched && !isSelected ? "* " : "  ") + pad(video.relativeDate || "", dateColWidth - 2);
+      return /* @__PURE__ */ jsx4(
+        VideoRow,
+        {
+          pointer,
+          channelText,
+          titleText,
+          dateText,
+          isSelected,
+          isWatched,
+          showChannel
+        },
+        video.id
+      );
+    }) }),
+    /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", children: [
+      message && /* @__PURE__ */ jsx4(Box4, { children: /* @__PURE__ */ jsx4(Text4, { color: "green", children: message }) }),
+      error && filteredVideos.length > 0 && /* @__PURE__ */ jsx4(Box4, { children: /* @__PURE__ */ jsx4(Text4, { color: "red", children: error }) }),
+      /* @__PURE__ */ jsx4(StatusBar, { children: isFiltering ? /* @__PURE__ */ jsxs4(Text4, { children: [
+        /* @__PURE__ */ jsx4(Text4, { color: "yellow", children: "Filter: " }),
+        /* @__PURE__ */ jsx4(Text4, { children: filterText }),
+        /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "_" }),
+        /* @__PURE__ */ jsx4(Text4, { color: "gray", children: "  (Enter to confirm, Esc to cancel)" })
+      ] }) : /* @__PURE__ */ jsxs4(Fragment3, { children: [
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "Enter", description: " play" }),
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "w", description: "atched" }),
+        channel && /* @__PURE__ */ jsx4(KeyHint, { keyName: "m", description: "ark all" }),
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "/", description: " filter" }),
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "s", description: hideShorts ? " +shorts" : " -shorts" }),
+        (channel ? displayTotalPages > 1 : totalPages > 1) && /* @__PURE__ */ jsxs4(Fragment3, { children: [
+          /* @__PURE__ */ jsx4(KeyHint, { keyName: "n", description: "ext" }),
+          /* @__PURE__ */ jsx4(KeyHint, { keyName: "p", description: "rev" })
+        ] }),
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "r", description: "efresh" }),
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "b", description: "ack" }),
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "q", description: "uit" })
       ] }) })
-    ] }),
-    message && /* @__PURE__ */ jsx5(Box5, { marginTop: 1, children: /* @__PURE__ */ jsx5(Text5, { color: "green", children: message }) }),
-    error && videos.length > 0 && /* @__PURE__ */ jsx5(Box5, { marginTop: 1, children: /* @__PURE__ */ jsx5(Text5, { color: "red", children: error }) }),
-    /* @__PURE__ */ jsx5(StatusBar, { children: isFiltering ? /* @__PURE__ */ jsxs5(Text5, { children: [
-      /* @__PURE__ */ jsx5(Text5, { color: "yellow", children: "Filter: " }),
-      /* @__PURE__ */ jsx5(Text5, { children: filterText }),
-      /* @__PURE__ */ jsx5(Text5, { color: "gray", children: "_" }),
-      /* @__PURE__ */ jsx5(Text5, { color: "gray", children: "  (Enter to confirm, Esc to cancel)" })
-    ] }) : /* @__PURE__ */ jsxs5(Fragment3, { children: [
-      /* @__PURE__ */ jsx5(KeyHint, { keyName: "Enter", description: " play" }),
-      /* @__PURE__ */ jsx5(KeyHint, { keyName: "w", description: "atched" }),
-      /* @__PURE__ */ jsx5(KeyHint, { keyName: "/", description: " filter" }),
-      /* @__PURE__ */ jsx5(KeyHint, { keyName: "s", description: hideShorts ? " +shorts" : " -shorts" }),
-      !channel && totalPages > 1 && /* @__PURE__ */ jsxs5(Fragment3, { children: [
-        /* @__PURE__ */ jsx5(KeyHint, { keyName: "n", description: "ext" }),
-        /* @__PURE__ */ jsx5(KeyHint, { keyName: "p", description: "rev" })
-      ] }),
-      /* @__PURE__ */ jsx5(KeyHint, { keyName: "r", description: "efresh" }),
-      /* @__PURE__ */ jsx5(KeyHint, { keyName: "b", description: "ack" }),
-      /* @__PURE__ */ jsx5(KeyHint, { keyName: "q", description: "uit" })
-    ] }) })
+    ] })
   ] });
 }
 
 // src/App.jsx
-import { jsx as jsx6, jsxs as jsxs6 } from "react/jsx-runtime";
+import { jsx as jsx5, jsxs as jsxs5 } from "react/jsx-runtime";
 function App({ initialChannel }) {
   const { exit } = useApp();
   const [screen, setScreen] = useState3(initialChannel ? "videos" : "channels");
@@ -1236,8 +1374,8 @@ function App({ initialChannel }) {
   const markChecked = () => {
     hasCheckedForNew.current = true;
   };
-  return /* @__PURE__ */ jsxs6(Box6, { flexDirection: "column", children: [
-    screen === "channels" && /* @__PURE__ */ jsx6(
+  return /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", children: [
+    screen === "channels" && /* @__PURE__ */ jsx5(
       ChannelList,
       {
         onSelectChannel: handleSelectChannel,
@@ -1248,7 +1386,7 @@ function App({ initialChannel }) {
         savedIndex: savedChannelListIndex.current
       }
     ),
-    screen === "videos" && /* @__PURE__ */ jsx6(
+    screen === "videos" && /* @__PURE__ */ jsx5(
       VideoList,
       {
         channel: selectedChannel,
@@ -1444,7 +1582,7 @@ async function main() {
       process.exit(1);
     }
   }
-  render(React7.createElement(App, { initialChannel }));
+  render(React6.createElement(App, { initialChannel }));
 }
 main().catch((err) => {
   console.error(err);

@@ -200,6 +200,29 @@ export function toggleWatched(videoId) {
   }
 }
 
+/**
+ * Mark multiple videos as watched (batch operation)
+ * @param {Array<string>} videoIds - Array of video IDs to mark as watched
+ * @returns {number} Number of videos marked
+ */
+export function markChannelAllWatched(videoIds) {
+  const watched = loadWatched();
+  const now = new Date().toISOString();
+  let count = 0;
+  
+  for (const videoId of videoIds) {
+    if (!watched.videos[videoId]) {
+      watched.videos[videoId] = { watchedAt: now };
+      count++;
+    }
+  }
+  
+  if (count > 0) {
+    saveWatched(watched);
+  }
+  return count;
+}
+
 // ============ Video Store (persistent video history) ============
 
 // In-memory cache
@@ -452,4 +475,35 @@ export function getNewVideoCounts() {
   }
   
   return counts;
+}
+
+/**
+ * Get channels where all videos have been watched
+ * @returns {Set<string>} Set of channelIds where all videos are watched
+ */
+export function getFullyWatchedChannels() {
+  const store = loadVideoStore();
+  const watched = loadWatched();
+  const watchedIds = new Set(Object.keys(watched.videos));
+  
+  // Group videos by channel
+  const channelVideos = new Map();
+  for (const video of Object.values(store.videos)) {
+    if (video.channelId) {
+      if (!channelVideos.has(video.channelId)) {
+        channelVideos.set(video.channelId, []);
+      }
+      channelVideos.get(video.channelId).push(video.id);
+    }
+  }
+  
+  // Check which channels have all videos watched
+  const fullyWatched = new Set();
+  for (const [channelId, videoIds] of channelVideos) {
+    if (videoIds.length > 0 && videoIds.every((id) => watchedIds.has(id))) {
+      fullyWatched.add(channelId);
+    }
+  }
+  
+  return fullyWatched;
 }
