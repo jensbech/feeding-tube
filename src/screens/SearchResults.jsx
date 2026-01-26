@@ -330,17 +330,26 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
         <StatusBar>
           {mode === 'list' && (
             <>
-              <KeyHint keyName="Enter" description=" play" />
-              <KeyHint keyName="a" description="dd channel" />
-              <KeyHint keyName="g" description=" new search" />
+              <KeyHint keyName="Enter" description=" play" onClick={handlePlay} />
+              <KeyHint keyName="a" description="dd channel" onClick={() => {
+                if (visibleVideos.length > 0) {
+                  const video = visibleVideos[selectedIndex];
+                  if (video.channelId) {
+                    setMode('confirm-add');
+                  } else {
+                    setError('Cannot add channel - no channel ID available');
+                  }
+                }
+              }} />
+              <KeyHint keyName="g" description=" new search" onClick={() => { setMode('new-search'); setSearchInput(''); }} />
               {totalPages > 1 && (
                 <>
-                  <KeyHint keyName="n" description="ext" />
-                  <KeyHint keyName="p" description="rev" />
+                  <KeyHint keyName="n" description="ext" onClick={() => { if (displayPage < totalPages - 1) { setDisplayPage((p) => p + 1); setSelectedIndex(0); } }} />
+                  <KeyHint keyName="p" description="rev" onClick={() => { if (displayPage > 0) { setDisplayPage((p) => p - 1); setSelectedIndex(0); } }} />
                 </>
               )}
-              <KeyHint keyName="b" description="ack" />
-              <KeyHint keyName="q" description="uit" />
+              <KeyHint keyName="b" description="ack" onClick={onBack} />
+              <KeyHint keyName="q" description="uit" onClick={() => process.exit(0)} />
             </>
           )}
         </StatusBar>

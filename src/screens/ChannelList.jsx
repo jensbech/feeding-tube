@@ -461,19 +461,33 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
             </Text>
           ) : mode === 'list' && (
             <>
-              <KeyHint keyName="a" description="dd" />
-              {subscriptions.length > 0 && <KeyHint keyName="d" description="elete" />}
-              <KeyHint keyName="v" description="iew all" />
-              <KeyHint keyName="g" description="lobal" />
-              <KeyHint keyName="/" description=" filter" />
-              <KeyHint keyName="r" description="efresh" />
+              <KeyHint keyName="a" description="dd" onClick={() => { setMode('add'); setAddUrl(''); }} />
+              {subscriptions.length > 0 && <KeyHint keyName="d" description="elete" onClick={() => setMode('confirm-delete')} />}
+              <KeyHint keyName="v" description="iew all" onClick={onBrowseAll} />
+              <KeyHint keyName="g" description="lobal" onClick={() => { setMode('global-search'); setSearchQuery(''); }} />
+              <KeyHint keyName="/" description=" filter" onClick={() => setIsFiltering(true)} />
+              <KeyHint keyName="r" description="efresh" onClick={() => {
+                if (subscriptions.length > 0 && !loading) {
+                  const refresh = async () => {
+                    setLoading(true);
+                    setLoadingMessage('Refreshing...');
+                    await refreshAllVideos(subscriptions);
+                    setNewCounts(getNewVideoCounts());
+                    setFullyWatched(getFullyWatchedChannels());
+                    setLoading(false);
+                    setLoadingMessage('');
+                    setMessage('Refreshed');
+                  };
+                  refresh();
+                }
+              }} />
               {totalPages > 1 && (
                 <>
-                  <KeyHint keyName="n" description="ext" />
-                  <KeyHint keyName="p" description="rev" />
+                  <KeyHint keyName="n" description="ext" onClick={() => { if (page < totalPages - 1) { setPage((p) => p + 1); setSelectedIndex(0); } }} />
+                  <KeyHint keyName="p" description="rev" onClick={() => { if (page > 0) { setPage((p) => p - 1); setSelectedIndex(0); } }} />
                 </>
               )}
-              <KeyHint keyName="q" description="uit" />
+              <KeyHint keyName="q" description="uit" onClick={onQuit} />
             </>
           )}
         </StatusBar>

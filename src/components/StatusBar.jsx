@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { Box, Text, useStdout } from 'ink';
+import { useOnClick } from '@ink-tools/ink-mouse';
 
 export default function StatusBar({ children }) {
   const { stdout } = useStdout();
@@ -17,9 +18,13 @@ export default function StatusBar({ children }) {
   );
 }
 
-export function KeyHint({ keyName, description }) {
+export function KeyHint({ keyName, description, onClick }) {
+  const ref = useRef(null);
+  
+  useOnClick(ref, onClick || (() => {}));
+  
   return (
-    <Box marginRight={2}>
+    <Box ref={ref} marginRight={2}>
       <Text color="yellow">({keyName})</Text>
       <Text color="gray">{description}</Text>
     </Box>

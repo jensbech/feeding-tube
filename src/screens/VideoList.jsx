@@ -406,20 +406,60 @@ export default function VideoList({ channel, onBack }) {
             </Text>
           ) : (
             <>
-              <KeyHint keyName="Enter" description=" play" />
-              <KeyHint keyName="w" description="atched" />
-              {channel && <KeyHint keyName="m" description="ark all" />}
-              <KeyHint keyName="/" description=" filter" />
-              <KeyHint keyName="s" description={hideShorts ? " +shorts" : " -shorts"} />
+              <KeyHint keyName="Enter" description=" play" onClick={handlePlay} />
+              <KeyHint keyName="w" description="atched" onClick={() => {
+                if (visibleVideos.length > 0) {
+                  const video = visibleVideos[selectedIndex];
+                  const nowWatched = toggleWatched(video.id);
+                  setWatchedIds(getWatchedIds());
+                  setMessage(nowWatched ? 'Marked as watched' : 'Marked as unwatched');
+                }
+              }} />
+              {channel && <KeyHint keyName="m" description="ark all" onClick={() => setMode('confirm-mark-all')} />}
+              <KeyHint keyName="/" description=" filter" onClick={() => setIsFiltering(true)} />
+              <KeyHint keyName="s" description={hideShorts ? " +shorts" : " -shorts"} onClick={() => {
+                const newValue = !hideShorts;
+                setHideShorts(newValue);
+                updateSettings({ hideShorts: newValue });
+                setSelectedIndex(0);
+                setDisplayPage(0);
+                setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
+              }} />
               {(channel ? displayTotalPages > 1 : totalPages > 1) && (
                 <>
-                  <KeyHint keyName="n" description="ext" />
-                  <KeyHint keyName="p" description="rev" />
+                  <KeyHint keyName="n" description="ext" onClick={() => {
+                    if (channel) {
+                      if (displayPage < displayTotalPages - 1) {
+                        setDisplayPage((p) => p + 1);
+                        setSelectedIndex(0);
+                      }
+                    } else if (currentPage < totalPages - 1) {
+                      setCurrentPage((p) => p + 1);
+                    }
+                  }} />
+                  <KeyHint keyName="p" description="rev" onClick={() => {
+                    if (channel) {
+                      if (displayPage > 0) {
+                        setDisplayPage((p) => p - 1);
+                        setSelectedIndex(0);
+                      }
+                    } else if (currentPage > 0) {
+                      setCurrentPage((p) => p - 1);
+                    }
+                  }} />
                 </>
               )}
-              <KeyHint keyName="r" description="efresh" />
-              <KeyHint keyName="b" description="ack" />
-              <KeyHint keyName="q" description="uit" />
+              <KeyHint keyName="r" description="efresh" onClick={() => { if (!loading) { setDisplayPage(0); initialLoad(); } }} />
+              <KeyHint keyName="b" description="ack" onClick={() => {
+                if (filterText) {
+                  setFilterText('');
+                  setSelectedIndex(0);
+                  setDisplayPage(0);
+                } else {
+                  onBack();
+                }
+              }} />
+              <KeyHint keyName="q" description="uit" onClick={() => process.exit(0)} />
             </>
           )}
         </StatusBar>
