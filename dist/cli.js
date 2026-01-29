@@ -21,7 +21,7 @@ import React from "react";
 import { Box, Text, useStdout } from "ink";
 import Spinner from "ink-spinner";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
-function Header({ title, subtitle, hints, loading }) {
+function Header({ title, subtitle, hints, loading, loadingMessage, hideShorts, onToggleShorts }) {
   const { stdout } = useStdout();
   const width = Math.max((stdout?.columns || 80) - 5, 60);
   return /* @__PURE__ */ jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [
@@ -36,9 +36,20 @@ function Header({ title, subtitle, hints, loading }) {
         subtitle,
         ")"
       ] }),
-      loading && /* @__PURE__ */ jsxs(Text, { color: "cyan", children: [
-        " ",
-        /* @__PURE__ */ jsx(Spinner, { type: "dots" })
+      hideShorts !== void 0 && /* @__PURE__ */ jsxs(Fragment, { children: [
+        /* @__PURE__ */ jsx(Text, { color: "gray", children: " \u2502 " }),
+        /* @__PURE__ */ jsxs(Text, { color: hideShorts ? "yellow" : "gray", children: [
+          "shorts ",
+          hideShorts ? "hidden" : "shown"
+        ] })
+      ] }),
+      loading && /* @__PURE__ */ jsxs(Fragment, { children: [
+        /* @__PURE__ */ jsx(Text, { color: "gray", children: " \u2502 " }),
+        /* @__PURE__ */ jsx(Text, { color: "cyan", children: /* @__PURE__ */ jsx(Spinner, { type: "dots" }) }),
+        loadingMessage && /* @__PURE__ */ jsxs(Text, { color: "green", children: [
+          " ",
+          loadingMessage
+        ] })
       ] })
     ] }),
     hints && /* @__PURE__ */ jsx(Box, { marginTop: 0, children: /* @__PURE__ */ jsx(Text, { color: "gray", children: hints }) }),
@@ -540,16 +551,33 @@ function formatDateYYYYMMDD(date) {
   return `${year}${month}${day}`;
 }
 function getRelativeDateFromDate(date) {
-  const now = /* @__PURE__ */ new Date();
-  const diffMs = now - date;
+  const nowUtc = /* @__PURE__ */ new Date();
+  const osloOffset = getOsloOffset(nowUtc);
+  const nowOslo = new Date(nowUtc.getTime() + osloOffset);
+  const dateOslo = new Date(date.getTime() + osloOffset);
+  const diffMs = nowOslo - dateOslo;
+  const diffMins = Math.floor(diffMs / (1e3 * 60));
+  const diffHours = Math.floor(diffMs / (1e3 * 60 * 60));
   const diffDays = Math.floor(diffMs / (1e3 * 60 * 60 * 24));
-  if (diffDays < 0) return "upcoming";
-  if (diffDays === 0) return "today";
+  if (diffMs < 0) return "upcoming";
+  if (diffMins < 60) return `${Math.max(1, diffMins)}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
   if (diffDays === 1) return "1d ago";
   if (diffDays < 7) return `${diffDays}d ago`;
   if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
   if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
   return `${Math.floor(diffDays / 365)}y ago`;
+}
+function getOsloOffset(date) {
+  const year = date.getUTCFullYear();
+  const marchLastSunday = new Date(Date.UTC(year, 2, 31));
+  marchLastSunday.setUTCDate(31 - marchLastSunday.getUTCDay());
+  marchLastSunday.setUTCHours(1, 0, 0, 0);
+  const octoberLastSunday = new Date(Date.UTC(year, 9, 31));
+  octoberLastSunday.setUTCDate(31 - octoberLastSunday.getUTCDay());
+  octoberLastSunday.setUTCHours(1, 0, 0, 0);
+  const isDST = date >= marchLastSunday && date < octoberLastSunday;
+  return isDST ? 2 * 60 * 60 * 1e3 : 1 * 60 * 60 * 1e3;
 }
 async function refreshAllVideos(subscriptions) {
   const freshVideos = await fetchAllChannelsRSS(subscriptions);
@@ -887,6 +915,14 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
       setHideShorts(newValue);
       updateSettings({ hideShorts: newValue });
       setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
+    } else if (input === "w" && filteredSubs.length > 0) {
+      const channel = filteredSubs[selectedIndex];
+      const videos = getStoredVideos(channel.id);
+      const videoIds = videos.map((v) => v.id);
+      const count = markChannelAllWatched(videoIds);
+      setNewCounts(getNewVideoCounts(hideShorts));
+      setFullyWatched(getFullyWatchedChannels(hideShorts));
+      setMessage(`Marked ${count} videos as watched in ${channel.name}`);
     } else if (input === "m") {
       setMode("confirm-mark-all");
     } else if (key.upArrow || input === "k") {
@@ -1007,14 +1043,23 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
   }, [filteredSubs, scrollOffset, mode, onSelectChannel]);
   const countText = `${subscriptions.length} subscription${subscriptions.length !== 1 ? "s" : ""}`;
   const filterInfo = filterText ? ` (filter: "${filterText}")` : "";
-  const subtitle = loading ? `${countText}${filterInfo} - ${loadingMessage}` : `${countText}${filterInfo}`;
+  const subtitle = `${countText}${filterInfo}`;
+  const handleToggleShorts = () => {
+    const newValue = !hideShorts;
+    setHideShorts(newValue);
+    updateSettings({ hideShorts: newValue });
+    setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
+  };
   return /* @__PURE__ */ jsxs3(Box4, { flexDirection: "column", children: [
     /* @__PURE__ */ jsx4(
       Header,
       {
         title: "Channels",
         subtitle,
-        loading
+        loading,
+        loadingMessage,
+        hideShorts,
+        onToggleShorts: handleToggleShorts
       }
     ),
     mode === "add" && /* @__PURE__ */ jsxs3(Box4, { flexDirection: "column", children: [
@@ -1104,6 +1149,17 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
           setAddUrl("");
         } }),
         subscriptions.length > 0 && /* @__PURE__ */ jsx4(KeyHint, { keyName: "d", description: "elete", onClick: () => setMode("confirm-delete") }),
+        subscriptions.length > 0 && /* @__PURE__ */ jsx4(KeyHint, { keyName: "w", description: "atched", onClick: () => {
+          if (filteredSubs.length > 0) {
+            const channel = filteredSubs[selectedIndex];
+            const videos = getStoredVideos(channel.id);
+            const videoIds = videos.map((v) => v.id);
+            const count = markChannelAllWatched(videoIds);
+            setNewCounts(getNewVideoCounts(hideShorts));
+            setFullyWatched(getFullyWatchedChannels(hideShorts));
+            setMessage(`Marked ${count} videos as watched in ${channel.name}`);
+          }
+        } }),
         /* @__PURE__ */ jsx4(KeyHint, { keyName: "v", description: "iew all", onClick: onBrowseAll }),
         /* @__PURE__ */ jsx4(KeyHint, { keyName: "g", description: "lobal", onClick: () => {
           setMode("global-search");
@@ -1269,7 +1325,8 @@ var VideoRow = memo2(function VideoRow2({
     /* @__PURE__ */ jsx5(Text4, { color: getColor(void 0), dimColor: isWatched && !isSelected, children: pointer }),
     showChannel && /* @__PURE__ */ jsx5(Text4, { color: getColor("yellow"), dimColor: isWatched && !isSelected, children: channelText }),
     /* @__PURE__ */ jsx5(Text4, { color: getColor(void 0), dimColor: isWatched && !isSelected, children: titleText }),
-    /* @__PURE__ */ jsx5(Text4, { color: getColor("gray"), children: dateText })
+    /* @__PURE__ */ jsx5(Text4, { color: getColor("gray"), children: dateText }),
+    !isWatched && /* @__PURE__ */ jsx5(Text4, { color: "green", children: " \u25CF" })
   ] });
 });
 function VideoList({ channel, onBack }) {
@@ -1509,10 +1566,27 @@ function VideoList({ channel, onBack }) {
   const title = channel ? channel.name : "All Videos";
   const filterInfo = filterText ? ` (filter: "${filterText}")` : "";
   const pageInfo = !channel && totalPages > 1 ? ` [${currentPage + 1}/${totalPages}]` : "";
-  const loadingInfo = loading ? " - Refreshing..." : "";
-  const subtitle = `${filteredVideos.length} video${filteredVideos.length !== 1 ? "s" : ""}${filterInfo}${pageInfo}${loadingInfo}`;
+  const subtitle = `${filteredVideos.length} video${filteredVideos.length !== 1 ? "s" : ""}${filterInfo}${pageInfo}`;
+  const handleToggleShorts = () => {
+    const newValue = !hideShorts;
+    setHideShorts(newValue);
+    updateSettings({ hideShorts: newValue });
+    setSelectedIndex(0);
+    setScrollOffset(0);
+    setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
+  };
   return /* @__PURE__ */ jsxs4(Box5, { flexDirection: "column", children: [
-    /* @__PURE__ */ jsx5(Header, { title, subtitle, loading }),
+    /* @__PURE__ */ jsx5(
+      Header,
+      {
+        title,
+        subtitle,
+        loading,
+        loadingMessage: loading ? "Refreshing..." : "",
+        hideShorts,
+        onToggleShorts: handleToggleShorts
+      }
+    ),
     mode === "confirm-mark-all" && /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs4(Text4, { children: [
       "Mark all ",
       allVideos.length,
@@ -1527,7 +1601,7 @@ function VideoList({ channel, onBack }) {
       const pointer = isSelected ? ">" : " ";
       const channelText = showChannel ? pad(truncate(video.channelName, channelColWidth - 1), channelColWidth) : "";
       const titleText = pad(truncate(video.title, titleColWidth - 1), titleColWidth);
-      const dateText = (isWatched && !isSelected ? "* " : "  ") + pad(video.relativeDate || "", dateColWidth - 2);
+      const dateText = "  " + pad(video.relativeDate || "", dateColWidth - 2);
       return /* @__PURE__ */ jsx5(
         ClickableRow,
         {
@@ -1632,7 +1706,8 @@ var VideoRow3 = memo3(function VideoRow4({
     /* @__PURE__ */ jsx6(Text5, { color: isSelected ? "cyan" : void 0, dimColor: isWatched && !isSelected, children: pointer }),
     /* @__PURE__ */ jsx6(Text5, { color: isSelected ? "cyan" : "yellow", dimColor: isWatched && !isSelected, children: channelText }),
     /* @__PURE__ */ jsx6(Text5, { color: isSelected ? "cyan" : void 0, dimColor: isWatched && !isSelected, children: titleText }),
-    /* @__PURE__ */ jsx6(Text5, { color: isSelected ? "cyan" : "gray", children: durationText })
+    /* @__PURE__ */ jsx6(Text5, { color: isSelected ? "cyan" : "gray", children: durationText }),
+    !isWatched && /* @__PURE__ */ jsx6(Text5, { color: "green", children: " \u25CF" })
   ] });
 });
 function SearchResults({ query, onBack, onNewSearch }) {
@@ -1805,9 +1880,17 @@ function SearchResults({ query, onBack, onNewSearch }) {
   const durationColWidth = 8;
   const availableWidth = Math.max(terminalWidth - 5, 80);
   const titleColWidth = availableWidth - 2 - channelColWidth - durationColWidth - 2;
-  const subtitle = loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} for "${currentQuery}"`;
+  const subtitle = loading ? "" : `${results.length} result${results.length !== 1 ? "s" : ""} for "${currentQuery}"`;
   return /* @__PURE__ */ jsxs5(Box6, { flexDirection: "column", children: [
-    /* @__PURE__ */ jsx6(Header, { title: "Search YouTube", subtitle, loading }),
+    /* @__PURE__ */ jsx6(
+      Header,
+      {
+        title: "Search YouTube",
+        subtitle,
+        loading,
+        loadingMessage: loading ? "Searching..." : ""
+      }
+    ),
     mode === "new-search" && /* @__PURE__ */ jsxs5(Box6, { flexDirection: "column", children: [
       /* @__PURE__ */ jsxs5(Box6, { children: [
         /* @__PURE__ */ jsx6(Text5, { color: "cyan", children: "New search: " }),

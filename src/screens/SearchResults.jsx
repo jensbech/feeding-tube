@@ -9,13 +9,13 @@ import { playVideo } from '../lib/player.js';
 import { getWatchedIds, addSubscription, getSubscriptions } from '../lib/config.js';
 
 // Memoized video row
-const VideoRow = memo(function VideoRow({ 
-  pointer, channelText, titleText, durationText, isSelected, isWatched 
+const VideoRow = memo(function VideoRow({
+  pointer, channelText, titleText, durationText, isSelected, isWatched
 }) {
   return (
     <>
       <Text color={isSelected ? 'cyan' : undefined} dimColor={isWatched && !isSelected}>
-        {pointer} 
+        {pointer}
       </Text>
       <Text color={isSelected ? 'cyan' : 'yellow'} dimColor={isWatched && !isSelected}>
         {channelText}
@@ -26,6 +26,7 @@ const VideoRow = memo(function VideoRow({
       <Text color={isSelected ? 'cyan' : 'gray'}>
         {durationText}
       </Text>
+      {!isWatched && <Text color="green"> ●</Text>}
     </>
   );
 });
@@ -246,12 +247,17 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
   const titleColWidth = availableWidth - 2 - channelColWidth - durationColWidth - 2;
 
   const subtitle = loading
-    ? 'Searching...'
+    ? ''
     : `${results.length} result${results.length !== 1 ? 's' : ''} for "${currentQuery}"`;
 
   return (
     <Box flexDirection="column">
-      <Header title="Search YouTube" subtitle={subtitle} loading={loading} />
+      <Header
+        title="Search YouTube"
+        subtitle={subtitle}
+        loading={loading}
+        loadingMessage={loading ? 'Searching...' : ''}
+      />
 
       {mode === 'new-search' && (
         <Box flexDirection="column">

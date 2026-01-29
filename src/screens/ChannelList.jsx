@@ -4,7 +4,7 @@ import TextInput from 'ink-text-input';
 import Header from '../components/Header.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
 import ClickableRow from '../components/ClickableRow.jsx';
-import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed, markAllChannelsViewed, getFullyWatchedChannels, getSettings, updateSettings } from '../lib/config.js';
+import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed, markAllChannelsViewed, getFullyWatchedChannels, getSettings, updateSettings, getStoredVideos, markChannelAllWatched } from '../lib/config.js';
 import { getChannelInfo, primeChannel, refreshAllVideos } from '../lib/ytdlp.js';
 
 // Memoized channel row to reduce re-renders
@@ -216,6 +216,15 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       setHideShorts(newValue);
       updateSettings({ hideShorts: newValue });
       setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
+    } else if (input === 'w' && filteredSubs.length > 0) {
+      // Mark all videos in selected channel as watched
+      const channel = filteredSubs[selectedIndex];
+      const videos = getStoredVideos(channel.id);
+      const videoIds = videos.map((v) => v.id);
+      const count = markChannelAllWatched(videoIds);
+      setNewCounts(getNewVideoCounts(hideShorts));
+      setFullyWatched(getFullyWatchedChannels(hideShorts));
+      setMessage(`Marked ${count} videos as watched in ${channel.name}`);
     } else if (input === 'm') {
       setMode('confirm-mark-all');
     } else if (key.upArrow || input === 'k') {
@@ -358,7 +367,14 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
   // Build subtitle with optional loading indicator
   const countText = `${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''}`;
   const filterInfo = filterText ? ` (filter: "${filterText}")` : '';
-  const subtitle = loading ? `${countText}${filterInfo} - ${loadingMessage}` : `${countText}${filterInfo}`;
+  const subtitle = `${countText}${filterInfo}`;
+
+  const handleToggleShorts = () => {
+    const newValue = !hideShorts;
+    setHideShorts(newValue);
+    updateSettings({ hideShorts: newValue });
+    setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
+  };
 
   return (
     <Box flexDirection="column">
@@ -366,6 +382,9 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
         title="Channels"
         subtitle={subtitle}
         loading={loading}
+        loadingMessage={loadingMessage}
+        hideShorts={hideShorts}
+        onToggleShorts={handleToggleShorts}
       />
 
       {mode === 'add' && (
@@ -478,6 +497,17 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
             <>
               <KeyHint keyName="a" description="dd" onClick={() => { setMode('add'); setAddUrl(''); }} />
               {subscriptions.length > 0 && <KeyHint keyName="d" description="elete" onClick={() => setMode('confirm-delete')} />}
+              {subscriptions.length > 0 && <KeyHint keyName="w" description="atched" onClick={() => {
+                if (filteredSubs.length > 0) {
+                  const channel = filteredSubs[selectedIndex];
+                  const videos = getStoredVideos(channel.id);
+                  const videoIds = videos.map((v) => v.id);
+                  const count = markChannelAllWatched(videoIds);
+                  setNewCounts(getNewVideoCounts(hideShorts));
+                  setFullyWatched(getFullyWatchedChannels(hideShorts));
+                  setMessage(`Marked ${count} videos as watched in ${channel.name}`);
+                }
+              }} />}
               <KeyHint keyName="v" description="iew all" onClick={onBrowseAll} />
               <KeyHint keyName="g" description="lobal" onClick={() => { setMode('global-search'); setSearchQuery(''); }} />
               <KeyHint keyName="/" description=" filter" onClick={() => setIsFiltering(true)} />

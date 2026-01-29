@@ -8,18 +8,18 @@ import { getSubscriptions, getSettings, getWatchedIds, updateSettings, toggleWat
 import { playVideo } from '../lib/player.js';
 
 // Memoized video row to reduce re-renders
-const VideoRow = memo(function VideoRow({ 
-  pointer, channelText, titleText, dateText, isSelected, isWatched, showChannel 
+const VideoRow = memo(function VideoRow({
+  pointer, channelText, titleText, dateText, isSelected, isWatched, showChannel
 }) {
   const getColor = (defaultColor) => {
     if (isSelected) return 'cyan';
     return defaultColor;
   };
-  
+
   return (
     <>
       <Text color={getColor(undefined)} dimColor={isWatched && !isSelected}>
-        {pointer} 
+        {pointer}
       </Text>
       {showChannel && (
         <Text color={getColor('yellow')} dimColor={isWatched && !isSelected}>{channelText}</Text>
@@ -30,6 +30,7 @@ const VideoRow = memo(function VideoRow({
       <Text color={getColor('gray')}>
         {dateText}
       </Text>
+      {!isWatched && <Text color="green"> ●</Text>}
     </>
   );
 });
@@ -332,12 +333,27 @@ export default function VideoList({ channel, onBack }) {
   const filterInfo = filterText ? ` (filter: "${filterText}")` : '';
   // Show page info only for all videos view (store pagination)
   const pageInfo = !channel && totalPages > 1 ? ` [${currentPage + 1}/${totalPages}]` : '';
-  const loadingInfo = loading ? ' - Refreshing...' : '';
-  const subtitle = `${filteredVideos.length} video${filteredVideos.length !== 1 ? 's' : ''}${filterInfo}${pageInfo}${loadingInfo}`;
+  const subtitle = `${filteredVideos.length} video${filteredVideos.length !== 1 ? 's' : ''}${filterInfo}${pageInfo}`;
+
+  const handleToggleShorts = () => {
+    const newValue = !hideShorts;
+    setHideShorts(newValue);
+    updateSettings({ hideShorts: newValue });
+    setSelectedIndex(0);
+    setScrollOffset(0);
+    setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
+  };
 
   return (
     <Box flexDirection="column">
-      <Header title={title} subtitle={subtitle} loading={loading} />
+      <Header
+        title={title}
+        subtitle={subtitle}
+        loading={loading}
+        loadingMessage={loading ? 'Refreshing...' : ''}
+        hideShorts={hideShorts}
+        onToggleShorts={handleToggleShorts}
+      />
 
       {mode === 'confirm-mark-all' && (
         <Box>
@@ -366,7 +382,7 @@ export default function VideoList({ channel, onBack }) {
             const pointer = isSelected ? '>' : ' ';
             const channelText = showChannel ? pad(truncate(video.channelName, channelColWidth - 1), channelColWidth) : '';
             const titleText = pad(truncate(video.title, titleColWidth - 1), titleColWidth);
-            const dateText = (isWatched && !isSelected ? '* ' : '  ') + pad(video.relativeDate || '', dateColWidth - 2);
+            const dateText = '  ' + pad(video.relativeDate || '', dateColWidth - 2);
 
             return (
               <ClickableRow

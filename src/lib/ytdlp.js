@@ -183,20 +183,46 @@ function formatDateYYYYMMDD(date) {
 }
 
 /**
- * Get relative date from Date object
+ * Get relative date from Date object (using Europe/Oslo timezone)
  */
 function getRelativeDateFromDate(date) {
-  const now = new Date();
-  const diffMs = now - date;
+  // Get current time in Oslo timezone
+  const nowUtc = new Date();
+  const osloOffset = getOsloOffset(nowUtc);
+  const nowOslo = new Date(nowUtc.getTime() + osloOffset);
+  const dateOslo = new Date(date.getTime() + osloOffset);
+
+  const diffMs = nowOslo - dateOslo;
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  
-  if (diffDays < 0) return 'upcoming';
-  if (diffDays === 0) return 'today';
+
+  if (diffMs < 0) return 'upcoming';
+  if (diffMins < 60) return `${Math.max(1, diffMins)}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
   if (diffDays === 1) return '1d ago';
   if (diffDays < 7) return `${diffDays}d ago`;
   if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
   if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
   return `${Math.floor(diffDays / 365)}y ago`;
+}
+
+/**
+ * Get Oslo timezone offset in milliseconds
+ */
+function getOsloOffset(date) {
+  // Oslo is UTC+1 in winter, UTC+2 in summer (last Sunday of March to last Sunday of October)
+  const year = date.getUTCFullYear();
+  const marchLastSunday = new Date(Date.UTC(year, 2, 31));
+  marchLastSunday.setUTCDate(31 - marchLastSunday.getUTCDay());
+  marchLastSunday.setUTCHours(1, 0, 0, 0); // DST starts at 01:00 UTC
+
+  const octoberLastSunday = new Date(Date.UTC(year, 9, 31));
+  octoberLastSunday.setUTCDate(31 - octoberLastSunday.getUTCDay());
+  octoberLastSunday.setUTCHours(1, 0, 0, 0); // DST ends at 01:00 UTC
+
+  const isDST = date >= marchLastSunday && date < octoberLastSunday;
+  return isDST ? 2 * 60 * 60 * 1000 : 1 * 60 * 60 * 1000;
 }
 
 /**
