@@ -4,7 +4,7 @@ import TextInput from 'ink-text-input';
 import Header from '../components/Header.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
 import ClickableRow from '../components/ClickableRow.jsx';
-import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed, markAllChannelsViewed, getFullyWatchedChannels } from '../lib/config.js';
+import { getSubscriptions, addSubscription, removeSubscription, getNewVideoCounts, updateChannelLastViewed, markAllChannelsViewed, getFullyWatchedChannels, getSettings, updateSettings } from '../lib/config.js';
 import { getChannelInfo, primeChannel, refreshAllVideos } from '../lib/ytdlp.js';
 
 // Memoized channel row to reduce re-renders
@@ -38,6 +38,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
   const [fullyWatched, setFullyWatched] = useState(new Set());
   const [filterText, setFilterText] = useState('');
   const [isFiltering, setIsFiltering] = useState(false);
+  const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? true);
 
   // Filter subscriptions by name
   const filteredSubs = filterText
@@ -63,8 +64,8 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
     const init = async () => {
       const subs = getSubscriptions();
       setSubscriptions(subs);
-      setNewCounts(getNewVideoCounts()); // Show existing counts immediately
-      setFullyWatched(getFullyWatchedChannels());
+      setNewCounts(getNewVideoCounts(hideShorts)); // Show existing counts immediately
+      setFullyWatched(getFullyWatchedChannels(hideShorts));
 
       // Prefetch RSS to detect new videos (only on first mount) - background load
       if (subs.length > 0 && !skipRefresh) {
@@ -75,13 +76,19 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
         setLoadingMessage('');
         onRefreshDone?.();
         // Update counts after fetch
-        setNewCounts(getNewVideoCounts());
-        setFullyWatched(getFullyWatchedChannels());
+        setNewCounts(getNewVideoCounts(hideShorts));
+        setFullyWatched(getFullyWatchedChannels(hideShorts));
       }
     };
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Update counts when hideShorts changes
+  useEffect(() => {
+    setNewCounts(getNewVideoCounts(hideShorts));
+    setFullyWatched(getFullyWatchedChannels(hideShorts));
+  }, [hideShorts]);
 
   // Clear messages after 3 seconds
   useEffect(() => {
@@ -197,13 +204,18 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
         setLoading(true);
         setLoadingMessage('Refreshing...');
         await refreshAllVideos(subscriptions);
-        setNewCounts(getNewVideoCounts());
-        setFullyWatched(getFullyWatchedChannels());
+        setNewCounts(getNewVideoCounts(hideShorts));
+        setFullyWatched(getFullyWatchedChannels(hideShorts));
         setLoading(false);
         setLoadingMessage('');
         setMessage('Refreshed');
       };
       refresh();
+    } else if (input === 's') {
+      const newValue = !hideShorts;
+      setHideShorts(newValue);
+      updateSettings({ hideShorts: newValue });
+      setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
     } else if (input === 'm') {
       setMode('confirm-mark-all');
     } else if (input === 'n' && totalPages > 1 && page < totalPages - 1) {
@@ -296,9 +308,8 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
     if (visibleChannels.length === 0) return;
 
     const channel = visibleChannels[selectedIndex];
-    // Find actual index in original subscriptions array
-    const globalIndex = subscriptions.findIndex(s => s.id === channel.id);
-    const result = removeSubscription(globalIndex);
+    // Pass channel ID to remove by ID (not index, since list is sorted differently)
+    const result = removeSubscription(channel.id);
 
     if (result.success) {
       setSubscriptions(getSubscriptions());
@@ -466,14 +477,20 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
               <KeyHint keyName="v" description="iew all" onClick={onBrowseAll} />
               <KeyHint keyName="g" description="lobal" onClick={() => { setMode('global-search'); setSearchQuery(''); }} />
               <KeyHint keyName="/" description=" filter" onClick={() => setIsFiltering(true)} />
+              <KeyHint keyName="s" description={hideShorts ? ' +shorts' : ' -shorts'} onClick={() => {
+                const newValue = !hideShorts;
+                setHideShorts(newValue);
+                updateSettings({ hideShorts: newValue });
+                setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
+              }} />
               <KeyHint keyName="r" description="efresh" onClick={() => {
                 if (subscriptions.length > 0 && !loading) {
                   const refresh = async () => {
                     setLoading(true);
                     setLoadingMessage('Refreshing...');
                     await refreshAllVideos(subscriptions);
-                    setNewCounts(getNewVideoCounts());
-                    setFullyWatched(getFullyWatchedChannels());
+                    setNewCounts(getNewVideoCounts(hideShorts));
+                    setFullyWatched(getFullyWatchedChannels(hideShorts));
                     setLoading(false);
                     setLoadingMessage('');
                     setMessage('Refreshed');

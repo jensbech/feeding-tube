@@ -79,21 +79,27 @@ import { Box as Box3 } from "ink";
 import { useOnClick as useOnClick2 } from "@ink-tools/ink-mouse";
 import { jsx as jsx3 } from "react/jsx-runtime";
 var DOUBLE_CLICK_THRESHOLD = 400;
+var globalLastClickTime = 0;
+var globalLastClickIndex = -1;
+var globalClickLock = false;
 function ClickableRow({ index, onSelect, onActivate, children }) {
   const ref = useRef2(null);
-  const lastClickTime = useRef2(0);
-  const lastClickIndex = useRef2(-1);
   const handleClick = useCallback(() => {
+    if (globalClickLock) return;
+    globalClickLock = true;
+    setTimeout(() => {
+      globalClickLock = false;
+    }, 50);
     const now = Date.now();
-    const timeDiff = now - lastClickTime.current;
-    if (timeDiff < DOUBLE_CLICK_THRESHOLD && lastClickIndex.current === index) {
+    const timeDiff = now - globalLastClickTime;
+    if (timeDiff < DOUBLE_CLICK_THRESHOLD && globalLastClickIndex === index) {
       onActivate?.(index);
-      lastClickTime.current = 0;
-      lastClickIndex.current = -1;
+      globalLastClickTime = 0;
+      globalLastClickIndex = -1;
     } else {
       onSelect?.(index);
-      lastClickTime.current = now;
-      lastClickIndex.current = index;
+      globalLastClickTime = now;
+      globalLastClickIndex = index;
     }
   }, [index, onSelect, onActivate]);
   useOnClick2(ref, handleClick);
@@ -113,7 +119,7 @@ var DEFAULT_CONFIG = {
   settings: {
     player: "mpv",
     videosPerChannel: 15,
-    hideShorts: false
+    hideShorts: true
   }
 };
 function ensureConfig() {
@@ -373,13 +379,14 @@ function markAllChannelsViewed(channelIds) {
   }
   saveConfig(config);
 }
-function getNewVideoCounts() {
+function getNewVideoCounts(hideShorts = false) {
   const config = loadConfig();
   const channelLastViewed = config.channelLastViewed || {};
   const store = loadVideoStore();
   const counts = /* @__PURE__ */ new Map();
   for (const video of Object.values(store.videos)) {
     if (video.publishedDate && video.channelId) {
+      if (hideShorts && video.isShort) continue;
       const lastViewed = channelLastViewed[video.channelId];
       if (!lastViewed || video.publishedDate > lastViewed) {
         const current = counts.get(video.channelId) || 0;
@@ -389,13 +396,14 @@ function getNewVideoCounts() {
   }
   return counts;
 }
-function getFullyWatchedChannels() {
+function getFullyWatchedChannels(hideShorts = false) {
   const store = loadVideoStore();
   const watched = loadWatched();
   const watchedIds = new Set(Object.keys(watched.videos));
   const channelVideos = /* @__PURE__ */ new Map();
   for (const video of Object.values(store.videos)) {
     if (video.channelId) {
+      if (hideShorts && video.isShort) continue;
       if (!channelVideos.has(video.channelId)) {
         channelVideos.set(video.channelId, []);
       }
@@ -754,6 +762,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
   const [fullyWatched, setFullyWatched] = useState(/* @__PURE__ */ new Set());
   const [filterText, setFilterText] = useState("");
   const [isFiltering, setIsFiltering] = useState(false);
+  const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? true);
   const filteredSubs = filterText ? subscriptions.filter((s) => s.name.toLowerCase().includes(filterText.toLowerCase())) : subscriptions;
   const PAGE_SIZE = 30;
   const totalPages = Math.ceil(filteredSubs.length / PAGE_SIZE);
@@ -770,8 +779,8 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
     const init = async () => {
       const subs = getSubscriptions();
       setSubscriptions(subs);
-      setNewCounts(getNewVideoCounts());
-      setFullyWatched(getFullyWatchedChannels());
+      setNewCounts(getNewVideoCounts(hideShorts));
+      setFullyWatched(getFullyWatchedChannels(hideShorts));
       if (subs.length > 0 && !skipRefresh) {
         setLoading(true);
         setLoadingMessage("Refreshing...");
@@ -779,12 +788,16 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
         setLoading(false);
         setLoadingMessage("");
         onRefreshDone?.();
-        setNewCounts(getNewVideoCounts());
-        setFullyWatched(getFullyWatchedChannels());
+        setNewCounts(getNewVideoCounts(hideShorts));
+        setFullyWatched(getFullyWatchedChannels(hideShorts));
       }
     };
     init();
   }, []);
+  useEffect(() => {
+    setNewCounts(getNewVideoCounts(hideShorts));
+    setFullyWatched(getFullyWatchedChannels(hideShorts));
+  }, [hideShorts]);
   useEffect(() => {
     if (message || error) {
       const timer = setTimeout(() => {
@@ -884,13 +897,18 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
         setLoading(true);
         setLoadingMessage("Refreshing...");
         await refreshAllVideos(subscriptions);
-        setNewCounts(getNewVideoCounts());
-        setFullyWatched(getFullyWatchedChannels());
+        setNewCounts(getNewVideoCounts(hideShorts));
+        setFullyWatched(getFullyWatchedChannels(hideShorts));
         setLoading(false);
         setLoadingMessage("");
         setMessage("Refreshed");
       };
       refresh();
+    } else if (input === "s") {
+      const newValue = !hideShorts;
+      setHideShorts(newValue);
+      updateSettings({ hideShorts: newValue });
+      setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
     } else if (input === "m") {
       setMode("confirm-mark-all");
     } else if (input === "n" && totalPages > 1 && page < totalPages - 1) {
@@ -970,8 +988,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
   const handleDelete = () => {
     if (visibleChannels.length === 0) return;
     const channel = visibleChannels[selectedIndex];
-    const globalIndex = subscriptions.findIndex((s) => s.id === channel.id);
-    const result = removeSubscription(globalIndex);
+    const result = removeSubscription(channel.id);
     if (result.success) {
       setSubscriptions(getSubscriptions());
       setMessage(`Removed: ${channel.name}`);
@@ -1110,14 +1127,20 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
           setSearchQuery("");
         } }),
         /* @__PURE__ */ jsx4(KeyHint, { keyName: "/", description: " filter", onClick: () => setIsFiltering(true) }),
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "s", description: hideShorts ? " +shorts" : " -shorts", onClick: () => {
+          const newValue = !hideShorts;
+          setHideShorts(newValue);
+          updateSettings({ hideShorts: newValue });
+          setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
+        } }),
         /* @__PURE__ */ jsx4(KeyHint, { keyName: "r", description: "efresh", onClick: () => {
           if (subscriptions.length > 0 && !loading) {
             const refresh = async () => {
               setLoading(true);
               setLoadingMessage("Refreshing...");
               await refreshAllVideos(subscriptions);
-              setNewCounts(getNewVideoCounts());
-              setFullyWatched(getFullyWatchedChannels());
+              setNewCounts(getNewVideoCounts(hideShorts));
+              setFullyWatched(getFullyWatchedChannels(hideShorts));
               setLoading(false);
               setLoadingMessage("");
               setMessage("Refreshed");
@@ -1289,7 +1312,7 @@ function VideoList({ channel, onBack }) {
   const [error, setError] = useState2(null);
   const [message, setMessage] = useState2(null);
   const [playing, setPlaying] = useState2(false);
-  const [hideShorts, setHideShorts] = useState2(() => getSettings().hideShorts ?? false);
+  const [hideShorts, setHideShorts] = useState2(() => getSettings().hideShorts ?? true);
   const [filterText, setFilterText] = useState2("");
   const [isFiltering, setIsFiltering] = useState2(false);
   const [currentPage, setCurrentPage] = useState2(0);

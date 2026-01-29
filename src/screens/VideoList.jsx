@@ -42,7 +42,7 @@ export default function VideoList({ channel, onBack }) {
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
   const [playing, setPlaying] = useState(false);
-  const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? false);
+  const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? true);
   const [filterText, setFilterText] = useState('');
   const [isFiltering, setIsFiltering] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
