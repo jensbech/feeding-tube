@@ -38,6 +38,7 @@ export default function VideoList({ channel, onBack }) {
   const [allVideos, setAllVideos] = useState([]);
   const [watchedIds, setWatchedIds] = useState(() => getWatchedIds());
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
@@ -49,31 +50,28 @@ export default function VideoList({ channel, onBack }) {
   const [totalVideos, setTotalVideos] = useState(0);
   const [pageSize, setPageSize] = useState(100);
   const [mode, setMode] = useState('list');
-  const [displayPage, setDisplayPage] = useState(0);
-  
+
   // Cache channel IDs to avoid re-computing
   const channelIdsRef = useRef(null);
-  
+
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
-  
+
   // Filter videos based on hideShorts and search text
   const filteredVideos = allVideos.filter((v) => {
     if (hideShorts && v.isShort) return false;
     if (filterText) {
       const search = filterText.toLowerCase();
-      return v.title?.toLowerCase().includes(search) || 
+      return v.title?.toLowerCase().includes(search) ||
              v.channelName?.toLowerCase().includes(search);
     }
     return true;
   });
-  
-  // Display pagination (30 items per page to prevent flickering)
-  const DISPLAY_PAGE_SIZE = 30;
-  const displayTotalPages = Math.ceil(filteredVideos.length / DISPLAY_PAGE_SIZE);
-  const displayStartIdx = displayPage * DISPLAY_PAGE_SIZE;
-  const visibleVideos = filteredVideos.slice(displayStartIdx, displayStartIdx + DISPLAY_PAGE_SIZE);
-  
+
+  // Scrolling viewport (30 items visible at a time)
+  const VISIBLE_COUNT = 30;
+  const visibleVideos = filteredVideos.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
+
   const totalPages = Math.ceil(totalVideos / pageSize);
 
   // Initial load: fetch RSS + first page
@@ -162,17 +160,17 @@ export default function VideoList({ channel, onBack }) {
         setIsFiltering(false);
         setFilterText('');
         setSelectedIndex(0);
-        setDisplayPage(0);
+        setScrollOffset(0);
       } else if (key.return) {
         setIsFiltering(false);
       } else if (key.backspace || key.delete) {
         setFilterText((t) => t.slice(0, -1));
         setSelectedIndex(0);
-        setDisplayPage(0);
+        setScrollOffset(0);
       } else if (input && !key.ctrl && !key.meta) {
         setFilterText((t) => t + input);
         setSelectedIndex(0);
-        setDisplayPage(0);
+        setScrollOffset(0);
       }
       return;
     }
@@ -196,73 +194,79 @@ export default function VideoList({ channel, onBack }) {
       if (filterText) {
         setFilterText('');
         setSelectedIndex(0);
-        setDisplayPage(0);
+        setScrollOffset(0);
       } else {
         onBack();
       }
     } else if (input === 'q') {
       process.exit(0);
     } else if (input === 'r' && !loading) {
-      setDisplayPage(0);
+      setScrollOffset(0);
       initialLoad();
     } else if (input === 's') {
       const newValue = !hideShorts;
       setHideShorts(newValue);
       updateSettings({ hideShorts: newValue });
       setSelectedIndex(0);
-      setDisplayPage(0);
+      setScrollOffset(0);
       setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
     } else if (input === '/') {
       setIsFiltering(true);
-    } else if (input === 'n') {
-      if (channel) {
-        // Channel view: display pagination
-        if (displayPage < displayTotalPages - 1) {
-          setDisplayPage((p) => p + 1);
-          setSelectedIndex(0);
-        }
-      } else if (currentPage < totalPages - 1) {
-        // All videos view: store pagination
-        setCurrentPage((p) => p + 1);
-      }
-    } else if (input === 'p') {
-      if (channel) {
-        // Channel view: display pagination
-        if (displayPage > 0) {
-          setDisplayPage((p) => p - 1);
-          setSelectedIndex(0);
-        }
-      } else if (currentPage > 0) {
-        // All videos view: store pagination
-        setCurrentPage((p) => p - 1);
-      }
-    } else if (input === 'w' && visibleVideos.length > 0) {
+    } else if (input === 'n' && !channel && currentPage < totalPages - 1) {
+      // All videos view: load next page from store
+      setCurrentPage((p) => p + 1);
+      setSelectedIndex(0);
+      setScrollOffset(0);
+    } else if (input === 'p' && !channel && currentPage > 0) {
+      // All videos view: load previous page from store
+      setCurrentPage((p) => p - 1);
+      setSelectedIndex(0);
+      setScrollOffset(0);
+    } else if (input === 'w' && filteredVideos.length > 0) {
       // Toggle watched status
-      const video = visibleVideos[selectedIndex];
+      const video = filteredVideos[selectedIndex];
       const nowWatched = toggleWatched(video.id);
       setWatchedIds(getWatchedIds());
       setMessage(nowWatched ? 'Marked as watched' : 'Marked as unwatched');
-    } else if (input === 'm' && channel && visibleVideos.length > 0) {
+    } else if (input === 'm' && channel && filteredVideos.length > 0) {
       // Mark all as watched (only in channel view)
       setMode('confirm-mark-all');
     } else if (key.upArrow || input === 'k') {
-      setSelectedIndex((i) => Math.max(0, i - 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.max(0, i - 1);
+        // Scroll up if needed
+        if (newIndex < scrollOffset) {
+          setScrollOffset(newIndex);
+        }
+        return newIndex;
+      });
     } else if (key.downArrow || input === 'j') {
-      setSelectedIndex((i) => Math.min(visibleVideos.length - 1, i + 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.min(filteredVideos.length - 1, i + 1);
+        // Scroll down if needed
+        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
+          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        }
+        return newIndex;
+      });
     } else if (key.return && !loading) {
       handlePlay();
     }
   });
 
   const handlePlay = async () => {
-    if (visibleVideos.length === 0) return;
+    if (filteredVideos.length === 0) return;
 
-    const video = visibleVideos[selectedIndex];
+    const video = filteredVideos[selectedIndex];
+    if (!video || !video.url) {
+      setError('No video selected');
+      return;
+    }
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
 
     const result = await playVideo(video.url, video.id);
-    
+
     // Update watched state immediately after playing
     setWatchedIds(getWatchedIds());
 
@@ -275,16 +279,20 @@ export default function VideoList({ channel, onBack }) {
     setPlaying(false);
   };
 
-  // Mouse handlers
-  const handleRowSelect = useCallback((index) => {
-    setSelectedIndex(index);
-  }, []);
+  // Mouse handlers - convert visible index to actual index
+  const handleRowSelect = useCallback((visibleIndex) => {
+    setSelectedIndex(scrollOffset + visibleIndex);
+  }, [scrollOffset]);
 
-  const handleRowActivate = useCallback(async (index) => {
-    if (visibleVideos.length === 0 || playing || loading) return;
-    
-    const video = visibleVideos[index];
-    setSelectedIndex(index);
+  const handleRowActivate = useCallback(async (visibleIndex) => {
+    if (filteredVideos.length === 0 || playing || loading) return;
+
+    const actualIndex = scrollOffset + visibleIndex;
+    const video = filteredVideos[actualIndex];
+    if (!video || !video.url) {
+      return;
+    }
+    setSelectedIndex(actualIndex);
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
 
@@ -298,7 +306,7 @@ export default function VideoList({ channel, onBack }) {
     }
 
     setPlaying(false);
-  }, [visibleVideos, playing, loading]);
+  }, [filteredVideos, scrollOffset, playing, loading]);
 
   // Truncate or pad text to exact width
   const truncate = (text, maxLen) => {
@@ -322,10 +330,8 @@ export default function VideoList({ channel, onBack }) {
 
   const title = channel ? channel.name : 'All Videos';
   const filterInfo = filterText ? ` (filter: "${filterText}")` : '';
-  // Show page info: for channel view use displayPage, for all videos use currentPage
-  const pageInfo = channel 
-    ? (displayTotalPages > 1 ? ` [${displayPage + 1}/${displayTotalPages}]` : '')
-    : (totalVideos > 0 ? ` [${currentPage + 1}/${totalPages}]` : '');
+  // Show page info only for all videos view (store pagination)
+  const pageInfo = !channel && totalPages > 1 ? ` [${currentPage + 1}/${totalPages}]` : '';
   const loadingInfo = loading ? ' - Refreshing...' : '';
   const subtitle = `${filteredVideos.length} video${filteredVideos.length !== 1 ? 's' : ''}${filterInfo}${pageInfo}${loadingInfo}`;
 
@@ -352,9 +358,10 @@ export default function VideoList({ channel, onBack }) {
       {filteredVideos.length > 0 && (
         <Box flexDirection="column">
           {visibleVideos.map((video, index) => {
-            const isSelected = index === selectedIndex;
+            const actualIndex = scrollOffset + index;
+            const isSelected = actualIndex === selectedIndex;
             const isWatched = watchedIds.has(video.id);
-            
+
             // Format columns with fixed widths
             const pointer = isSelected ? '>' : ' ';
             const channelText = showChannel ? pad(truncate(video.channelName, channelColWidth - 1), channelColWidth) : '';
@@ -408,8 +415,8 @@ export default function VideoList({ channel, onBack }) {
             <>
               <KeyHint keyName="Enter" description=" play" onClick={handlePlay} />
               <KeyHint keyName="w" description="atched" onClick={() => {
-                if (visibleVideos.length > 0) {
-                  const video = visibleVideos[selectedIndex];
+                if (filteredVideos.length > 0) {
+                  const video = filteredVideos[selectedIndex];
                   const nowWatched = toggleWatched(video.id);
                   setWatchedIds(getWatchedIds());
                   setMessage(nowWatched ? 'Marked as watched' : 'Marked as unwatched');
@@ -422,39 +429,33 @@ export default function VideoList({ channel, onBack }) {
                 setHideShorts(newValue);
                 updateSettings({ hideShorts: newValue });
                 setSelectedIndex(0);
-                setDisplayPage(0);
+                setScrollOffset(0);
                 setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
               }} />
-              {(channel ? displayTotalPages > 1 : totalPages > 1) && (
+              {!channel && totalPages > 1 && (
                 <>
                   <KeyHint keyName="n" description="ext" onClick={() => {
-                    if (channel) {
-                      if (displayPage < displayTotalPages - 1) {
-                        setDisplayPage((p) => p + 1);
-                        setSelectedIndex(0);
-                      }
-                    } else if (currentPage < totalPages - 1) {
+                    if (currentPage < totalPages - 1) {
                       setCurrentPage((p) => p + 1);
+                      setSelectedIndex(0);
+                      setScrollOffset(0);
                     }
                   }} />
                   <KeyHint keyName="p" description="rev" onClick={() => {
-                    if (channel) {
-                      if (displayPage > 0) {
-                        setDisplayPage((p) => p - 1);
-                        setSelectedIndex(0);
-                      }
-                    } else if (currentPage > 0) {
+                    if (currentPage > 0) {
                       setCurrentPage((p) => p - 1);
+                      setSelectedIndex(0);
+                      setScrollOffset(0);
                     }
                   }} />
                 </>
               )}
-              <KeyHint keyName="r" description="efresh" onClick={() => { if (!loading) { setDisplayPage(0); initialLoad(); } }} />
+              <KeyHint keyName="r" description="efresh" onClick={() => { if (!loading) { setScrollOffset(0); initialLoad(); } }} />
               <KeyHint keyName="b" description="ack" onClick={() => {
                 if (filterText) {
                   setFilterText('');
                   setSelectedIndex(0);
-                  setDisplayPage(0);
+                  setScrollOffset(0);
                 } else {
                   onBack();
                 }

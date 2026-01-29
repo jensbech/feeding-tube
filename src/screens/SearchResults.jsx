@@ -36,21 +36,19 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
   const [results, setResults] = useState([]);
   const [watchedIds, setWatchedIds] = useState(() => getWatchedIds());
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [displayPage, setDisplayPage] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [mode, setMode] = useState('list');
-  
+
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
-  
-  // Display pagination
-  const PAGE_SIZE = 30;
-  const totalPages = Math.ceil(results.length / PAGE_SIZE);
-  const startIdx = displayPage * PAGE_SIZE;
-  const visibleVideos = results.slice(startIdx, startIdx + PAGE_SIZE);
+
+  // Scrolling viewport
+  const VISIBLE_COUNT = 30;
+  const visibleVideos = results.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
 
   // Search on mount or when query changes
   useEffect(() => {
@@ -58,8 +56,8 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
       setLoading(true);
       setError(null);
       setSelectedIndex(0);
-      setDisplayPage(0);
-      
+      setScrollOffset(0);
+
       try {
         const searchResults = await searchYouTube(currentQuery, 50);
         setResults(searchResults);
@@ -69,7 +67,7 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
         setLoading(false);
       }
     };
-    
+
     search();
   }, [currentQuery]);
 
@@ -116,38 +114,44 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
     } else if (input === 'g') {
       setMode('new-search');
       setSearchInput('');
-    } else if (input === 'a' && visibleVideos.length > 0) {
+    } else if (input === 'a' && results.length > 0) {
       // Add channel to subscriptions
-      const video = visibleVideos[selectedIndex];
+      const video = results[selectedIndex];
       if (video.channelId) {
         setMode('confirm-add');
       } else {
         setError('Cannot add channel - no channel ID available');
       }
-    } else if (input === 'n' && totalPages > 1 && displayPage < totalPages - 1) {
-      setDisplayPage((p) => p + 1);
-      setSelectedIndex(0);
-    } else if (input === 'p' && totalPages > 1 && displayPage > 0) {
-      setDisplayPage((p) => p - 1);
-      setSelectedIndex(0);
     } else if (key.upArrow || input === 'k') {
-      setSelectedIndex((i) => Math.max(0, i - 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.max(0, i - 1);
+        if (newIndex < scrollOffset) {
+          setScrollOffset(newIndex);
+        }
+        return newIndex;
+      });
     } else if (key.downArrow || input === 'j') {
-      setSelectedIndex((i) => Math.min(visibleVideos.length - 1, i + 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.min(results.length - 1, i + 1);
+        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
+          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        }
+        return newIndex;
+      });
     } else if (key.return) {
       handlePlay();
     }
   });
 
   const handlePlay = async () => {
-    if (visibleVideos.length === 0) return;
+    if (results.length === 0) return;
 
-    const video = visibleVideos[selectedIndex];
+    const video = results[selectedIndex];
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
 
     const result = await playVideo(video.url, video.id);
-    
+
     setWatchedIds(getWatchedIds());
 
     if (result.success) {
@@ -159,16 +163,17 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
     setPlaying(false);
   };
 
-  // Mouse handlers
-  const handleRowSelect = useCallback((index) => {
-    setSelectedIndex(index);
-  }, []);
+  // Mouse handlers - convert visible index to actual index
+  const handleRowSelect = useCallback((visibleIndex) => {
+    setSelectedIndex(scrollOffset + visibleIndex);
+  }, [scrollOffset]);
 
-  const handleRowActivate = useCallback(async (index) => {
-    if (visibleVideos.length === 0 || playing || loading) return;
-    
-    const video = visibleVideos[index];
-    setSelectedIndex(index);
+  const handleRowActivate = useCallback(async (visibleIndex) => {
+    if (results.length === 0 || playing || loading) return;
+
+    const actualIndex = scrollOffset + visibleIndex;
+    const video = results[actualIndex];
+    setSelectedIndex(actualIndex);
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
 
@@ -182,10 +187,10 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
     }
 
     setPlaying(false);
-  }, [visibleVideos, playing, loading]);
+  }, [results, scrollOffset, playing, loading]);
 
   const handleAddChannel = async () => {
-    const video = visibleVideos[selectedIndex];
+    const video = results[selectedIndex];
     
     // Check if already subscribed
     const subs = getSubscriptions();
@@ -240,10 +245,9 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
   const availableWidth = Math.max(terminalWidth - 5, 80);
   const titleColWidth = availableWidth - 2 - channelColWidth - durationColWidth - 2;
 
-  const pageInfo = totalPages > 1 ? ` [${displayPage + 1}/${totalPages}]` : '';
-  const subtitle = loading 
-    ? 'Searching...' 
-    : `${results.length} result${results.length !== 1 ? 's' : ''} for "${currentQuery}"${pageInfo}`;
+  const subtitle = loading
+    ? 'Searching...'
+    : `${results.length} result${results.length !== 1 ? 's' : ''} for "${currentQuery}"`;
 
   return (
     <Box flexDirection="column">
@@ -264,10 +268,10 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
         </Box>
       )}
 
-      {mode === 'confirm-add' && visibleVideos.length > 0 && (
+      {mode === 'confirm-add' && results.length > 0 && (
         <Box>
           <Text color="cyan">
-            Subscribe to "{visibleVideos[selectedIndex].channelName}"? (Y/n)
+            Subscribe to "{results[selectedIndex]?.channelName}"? (Y/n)
           </Text>
         </Box>
       )}
@@ -285,9 +289,10 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
       {results.length > 0 && mode === 'list' && (
         <Box flexDirection="column">
           {visibleVideos.map((video, index) => {
-            const isSelected = index === selectedIndex;
+            const actualIndex = scrollOffset + index;
+            const isSelected = actualIndex === selectedIndex;
             const isWatched = watchedIds.has(video.id);
-            
+
             const pointer = isSelected ? '>' : ' ';
             const channelText = pad(truncate(video.channelName, channelColWidth - 1), channelColWidth);
             const titleText = pad(truncate(video.title, titleColWidth - 1), titleColWidth);
@@ -332,8 +337,8 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
             <>
               <KeyHint keyName="Enter" description=" play" onClick={handlePlay} />
               <KeyHint keyName="a" description="dd channel" onClick={() => {
-                if (visibleVideos.length > 0) {
-                  const video = visibleVideos[selectedIndex];
+                if (results.length > 0) {
+                  const video = results[selectedIndex];
                   if (video.channelId) {
                     setMode('confirm-add');
                   } else {
@@ -342,12 +347,6 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
                 }
               }} />
               <KeyHint keyName="g" description=" new search" onClick={() => { setMode('new-search'); setSearchInput(''); }} />
-              {totalPages > 1 && (
-                <>
-                  <KeyHint keyName="n" description="ext" onClick={() => { if (displayPage < totalPages - 1) { setDisplayPage((p) => p + 1); setSelectedIndex(0); } }} />
-                  <KeyHint keyName="p" description="rev" onClick={() => { if (displayPage > 0) { setDisplayPage((p) => p - 1); setSelectedIndex(0); } }} />
-                </>
-              )}
               <KeyHint keyName="b" description="ack" onClick={onBack} />
               <KeyHint keyName="q" description="uit" onClick={() => process.exit(0)} />
             </>

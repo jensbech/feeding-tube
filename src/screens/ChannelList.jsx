@@ -25,7 +25,7 @@ const ChannelRow = memo(function ChannelRow({ name, isSelected, hasNew, isFullyW
 export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, skipRefresh, onRefreshDone, savedIndex }) {
   const [subscriptions, setSubscriptions] = useState([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [page, setPage] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [mode, setMode] = useState('list');
   const [addUrl, setAddUrl] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -45,17 +45,17 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
     ? subscriptions.filter(s => s.name.toLowerCase().includes(filterText.toLowerCase()))
     : subscriptions;
 
-  const PAGE_SIZE = 30;
-  const totalPages = Math.ceil(filteredSubs.length / PAGE_SIZE);
-  const startIdx = page * PAGE_SIZE;
-  const visibleChannels = filteredSubs.slice(startIdx, startIdx + PAGE_SIZE);
+  const VISIBLE_COUNT = 30;
+  const visibleChannels = filteredSubs.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
 
   // Restore saved position on mount
   useEffect(() => {
     if (savedIndex > 0 && subscriptions.length > 0) {
-      const targetPage = Math.floor(savedIndex / PAGE_SIZE);
-      setPage(targetPage);
-      setSelectedIndex(savedIndex - targetPage * PAGE_SIZE);
+      setSelectedIndex(savedIndex);
+      // Ensure the saved index is visible
+      if (savedIndex >= VISIBLE_COUNT) {
+        setScrollOffset(savedIndex - Math.floor(VISIBLE_COUNT / 2));
+      }
     }
   }, [savedIndex, subscriptions.length]);
 
@@ -70,7 +70,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       // Prefetch RSS to detect new videos (only on first mount) - background load
       if (subs.length > 0 && !skipRefresh) {
         setLoading(true);
-        setLoadingMessage('Refreshing...');
+        setLoadingMessage('Checking for new videos...');
         await refreshAllVideos(subs);
         setLoading(false);
         setLoadingMessage('');
@@ -112,17 +112,17 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
         setIsFiltering(false);
         setFilterText('');
         setSelectedIndex(0);
-        setPage(0);
+        setScrollOffset(0);
       } else if (key.return) {
         setIsFiltering(false);
       } else if (key.backspace || key.delete) {
         setFilterText((t) => t.slice(0, -1));
         setSelectedIndex(0);
-        setPage(0);
+        setScrollOffset(0);
       } else if (input && !key.ctrl && !key.meta) {
         setFilterText((t) => t + input);
         setSelectedIndex(0);
-        setPage(0);
+        setScrollOffset(0);
       }
       return;
     }
@@ -184,7 +184,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       if (filterText) {
         setFilterText('');
         setSelectedIndex(0);
-        setPage(0);
+        setScrollOffset(0);
       }
     } else if (input === 'a') {
       setMode('add');
@@ -194,7 +194,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       setSearchQuery('');
     } else if (input === '/') {
       setIsFiltering(true);
-    } else if (input === 'd' && visibleChannels.length > 0) {
+    } else if (input === 'd' && filteredSubs.length > 0) {
       setMode('confirm-delete');
     } else if (input === 'v') {
       onBrowseAll();
@@ -202,7 +202,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       // Manual refresh (only if not already loading)
       const refresh = async () => {
         setLoading(true);
-        setLoadingMessage('Refreshing...');
+        setLoadingMessage('Checking for new videos...');
         await refreshAllVideos(subscriptions);
         setNewCounts(getNewVideoCounts(hideShorts));
         setFullyWatched(getFullyWatchedChannels(hideShorts));
@@ -218,23 +218,27 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
     } else if (input === 'm') {
       setMode('confirm-mark-all');
-    } else if (input === 'n' && totalPages > 1 && page < totalPages - 1) {
-      // Next page
-      setPage((p) => p + 1);
-      setSelectedIndex(0);
-    } else if (input === 'p' && totalPages > 1 && page > 0) {
-      // Previous page
-      setPage((p) => p - 1);
-      setSelectedIndex(0);
     } else if (key.upArrow || input === 'k') {
-      setSelectedIndex((i) => Math.max(0, i - 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.max(0, i - 1);
+        // Scroll up if needed
+        if (newIndex < scrollOffset) {
+          setScrollOffset(newIndex);
+        }
+        return newIndex;
+      });
     } else if (key.downArrow || input === 'j') {
-      setSelectedIndex((i) => Math.min(visibleChannels.length - 1, i + 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.min(filteredSubs.length - 1, i + 1);
+        // Scroll down if needed
+        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
+          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        }
+        return newIndex;
+      });
     } else if (key.return) {
-      if (visibleChannels.length > 0) {
-        const channel = visibleChannels[selectedIndex];
-        // Find actual index in original subscriptions array
-        const globalIndex = subscriptions.findIndex(s => s.id === channel.id);
+      if (filteredSubs.length > 0) {
+        const channel = filteredSubs[selectedIndex];
         // Mark channel as viewed (clears "new" indicator)
         updateChannelLastViewed(channel.id);
         setNewCounts((prev) => {
@@ -242,7 +246,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
           next.delete(channel.id);
           return next;
         });
-        onSelectChannel(channel, globalIndex);
+        onSelectChannel(channel, selectedIndex);
       }
     }
   });
@@ -305,9 +309,9 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
   };
 
   const handleDelete = () => {
-    if (visibleChannels.length === 0) return;
+    if (filteredSubs.length === 0) return;
 
-    const channel = visibleChannels[selectedIndex];
+    const channel = filteredSubs[selectedIndex];
     // Pass channel ID to remove by ID (not index, since list is sorted differently)
     const result = removeSubscription(channel.id);
 
@@ -331,31 +335,30 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
     onGlobalSearch(query.trim());
   };
 
-  // Mouse handlers
-  const handleRowSelect = useCallback((index) => {
-    setSelectedIndex(index);
-  }, []);
+  // Mouse handlers - convert visible index to actual index
+  const handleRowSelect = useCallback((visibleIndex) => {
+    setSelectedIndex(scrollOffset + visibleIndex);
+  }, [scrollOffset]);
 
-  const handleRowActivate = useCallback((index) => {
-    if (visibleChannels.length === 0 || mode !== 'list') return;
-    
-    const channel = visibleChannels[index];
-    const globalIndex = subscriptions.findIndex(s => s.id === channel.id);
-    
+  const handleRowActivate = useCallback((visibleIndex) => {
+    if (filteredSubs.length === 0 || mode !== 'list') return;
+
+    const actualIndex = scrollOffset + visibleIndex;
+    const channel = filteredSubs[actualIndex];
+
     updateChannelLastViewed(channel.id);
     setNewCounts((prev) => {
       const next = new Map(prev);
       next.delete(channel.id);
       return next;
     });
-    onSelectChannel(channel, globalIndex);
-  }, [visibleChannels, subscriptions, mode, onSelectChannel]);
+    onSelectChannel(channel, actualIndex);
+  }, [filteredSubs, scrollOffset, mode, onSelectChannel]);
 
-  // Build subtitle with optional loading indicator and page info
+  // Build subtitle with optional loading indicator
   const countText = `${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''}`;
   const filterInfo = filterText ? ` (filter: "${filterText}")` : '';
-  const pageInfo = totalPages > 1 ? ` [${page + 1}/${totalPages}]` : '';
-  const subtitle = loading ? `${countText}${filterInfo}${pageInfo} - ${loadingMessage}` : `${countText}${filterInfo}${pageInfo}`;
+  const subtitle = loading ? `${countText}${filterInfo} - ${loadingMessage}` : `${countText}${filterInfo}`;
 
   return (
     <Box flexDirection="column">
@@ -395,10 +398,10 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
         </Box>
       )}
 
-      {mode === 'confirm-delete' && visibleChannels.length > 0 && (
+      {mode === 'confirm-delete' && filteredSubs.length > 0 && (
         <Box flexDirection="column">
           <Text color="red">
-            Delete "{visibleChannels[selectedIndex].name}"? (y/N)
+            Delete "{filteredSubs[selectedIndex]?.name}"? (y/N)
           </Text>
         </Box>
       )}
@@ -423,6 +426,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
             visibleChannels.map((sub, index) => {
               const hasNew = newCounts.get(sub.id) > 0;
               const isFullyWatched = fullyWatched.has(sub.id);
+              const actualIndex = scrollOffset + index;
               return (
                 <ClickableRow
                   key={sub.id}
@@ -432,7 +436,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
                 >
                   <ChannelRow
                     name={sub.name}
-                    isSelected={index === selectedIndex}
+                    isSelected={actualIndex === selectedIndex}
                     hasNew={hasNew}
                     isFullyWatched={isFullyWatched}
                   />
@@ -487,7 +491,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
                 if (subscriptions.length > 0 && !loading) {
                   const refresh = async () => {
                     setLoading(true);
-                    setLoadingMessage('Refreshing...');
+                    setLoadingMessage('Checking for new videos...');
                     await refreshAllVideos(subscriptions);
                     setNewCounts(getNewVideoCounts(hideShorts));
                     setFullyWatched(getFullyWatchedChannels(hideShorts));
@@ -498,12 +502,6 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
                   refresh();
                 }
               }} />
-              {totalPages > 1 && (
-                <>
-                  <KeyHint keyName="n" description="ext" onClick={() => { if (page < totalPages - 1) { setPage((p) => p + 1); setSelectedIndex(0); } }} />
-                  <KeyHint keyName="p" description="rev" onClick={() => { if (page > 0) { setPage((p) => p - 1); setSelectedIndex(0); } }} />
-                </>
-              )}
               <KeyHint keyName="q" description="uit" onClick={onQuit} />
             </>
           )}

@@ -95,7 +95,6 @@ export async function playVideo(videoUrl, videoId) {
     if (player === 'mpv') {
       // mpv with ytdl integration - streams without downloading
       const subprocess = execa('mpv', [
-        '--ytdl-format=bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
         '--force-window=immediate',
         '--keep-open=no',
         videoUrl,
@@ -104,7 +103,7 @@ export async function playVideo(videoUrl, videoId) {
         detached: true,
         reject: false,
       });
-      
+
       subprocess.unref();
       return { success: true, player: 'mpv' };
     }
