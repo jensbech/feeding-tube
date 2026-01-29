@@ -57,6 +57,9 @@ export default function VideoList({ channel, onBack }) {
 
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
+  const terminalHeight = stdout?.rows || 24;
+  // Use 95% of available height to prevent flickering
+  const visibleCount = Math.max(5, Math.floor((terminalHeight - 6) * 0.95));
 
   // Filter videos based on hideShorts and search text
   const filteredVideos = allVideos.filter((v) => {
@@ -69,9 +72,8 @@ export default function VideoList({ channel, onBack }) {
     return true;
   });
 
-  // Scrolling viewport (30 items visible at a time)
-  const VISIBLE_COUNT = 30;
-  const visibleVideos = filteredVideos.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
+  // Scrolling viewport
+  const visibleVideos = filteredVideos.slice(scrollOffset, scrollOffset + visibleCount);
 
   const totalPages = Math.ceil(totalVideos / pageSize);
 
@@ -245,8 +247,8 @@ export default function VideoList({ channel, onBack }) {
       setSelectedIndex((i) => {
         const newIndex = Math.min(filteredVideos.length - 1, i + 1);
         // Scroll down if needed
-        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
-          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        if (newIndex >= scrollOffset + visibleCount) {
+          setScrollOffset(newIndex - visibleCount + 1);
         }
         return newIndex;
       });

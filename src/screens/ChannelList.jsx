@@ -1,5 +1,5 @@
 import React, { useState, useEffect, memo, useCallback } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import Header from '../components/Header.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
@@ -40,21 +40,25 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
   const [isFiltering, setIsFiltering] = useState(false);
   const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? true);
 
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+  // Use 95% of available height to prevent flickering
+  const visibleCount = Math.max(5, Math.floor((terminalHeight - 6) * 0.95));
+
   // Filter subscriptions by name
   const filteredSubs = filterText
     ? subscriptions.filter(s => s.name.toLowerCase().includes(filterText.toLowerCase()))
     : subscriptions;
 
-  const VISIBLE_COUNT = 30;
-  const visibleChannels = filteredSubs.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
+  const visibleChannels = filteredSubs.slice(scrollOffset, scrollOffset + visibleCount);
 
   // Restore saved position on mount
   useEffect(() => {
     if (savedIndex > 0 && subscriptions.length > 0) {
       setSelectedIndex(savedIndex);
       // Ensure the saved index is visible
-      if (savedIndex >= VISIBLE_COUNT) {
-        setScrollOffset(savedIndex - Math.floor(VISIBLE_COUNT / 2));
+      if (savedIndex >= visibleCount) {
+        setScrollOffset(savedIndex - Math.floor(visibleCount / 2));
       }
     }
   }, [savedIndex, subscriptions.length]);
@@ -217,10 +221,11 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       updateSettings({ hideShorts: newValue });
       setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
     } else if (input === 'w' && filteredSubs.length > 0) {
-      // Mark all videos in selected channel as watched
+      // Mark all videos in selected channel as watched (respecting hideShorts)
       const channel = filteredSubs[selectedIndex];
       const videos = getStoredVideos(channel.id);
-      const videoIds = videos.map((v) => v.id);
+      const filteredVideos = hideShorts ? videos.filter((v) => !v.isShort) : videos;
+      const videoIds = filteredVideos.map((v) => v.id);
       const count = markChannelAllWatched(videoIds);
       setNewCounts(getNewVideoCounts(hideShorts));
       setFullyWatched(getFullyWatchedChannels(hideShorts));
@@ -240,8 +245,8 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       setSelectedIndex((i) => {
         const newIndex = Math.min(filteredSubs.length - 1, i + 1);
         // Scroll down if needed
-        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
-          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        if (newIndex >= scrollOffset + visibleCount) {
+          setScrollOffset(newIndex - visibleCount + 1);
         }
         return newIndex;
       });
@@ -501,7 +506,8 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
                 if (filteredSubs.length > 0) {
                   const channel = filteredSubs[selectedIndex];
                   const videos = getStoredVideos(channel.id);
-                  const videoIds = videos.map((v) => v.id);
+                  const filteredVideos = hideShorts ? videos.filter((v) => !v.isShort) : videos;
+                  const videoIds = filteredVideos.map((v) => v.id);
                   const count = markChannelAllWatched(videoIds);
                   setNewCounts(getNewVideoCounts(hideShorts));
                   setFullyWatched(getFullyWatchedChannels(hideShorts));

@@ -46,10 +46,12 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
 
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
+  const terminalHeight = stdout?.rows || 24;
+  // Use 95% of available height to prevent flickering
+  const visibleCount = Math.max(5, Math.floor((terminalHeight - 6) * 0.95));
 
   // Scrolling viewport
-  const VISIBLE_COUNT = 30;
-  const visibleVideos = results.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
+  const visibleVideos = results.slice(scrollOffset, scrollOffset + visibleCount);
 
   // Search on mount or when query changes
   useEffect(() => {
@@ -134,8 +136,8 @@ export default function SearchResults({ query, onBack, onNewSearch }) {
     } else if (key.downArrow || input === 'j') {
       setSelectedIndex((i) => {
         const newIndex = Math.min(results.length - 1, i + 1);
-        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
-          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        if (newIndex >= scrollOffset + visibleCount) {
+          setScrollOffset(newIndex - visibleCount + 1);
         }
         return newIndex;
       });

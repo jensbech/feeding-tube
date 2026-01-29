@@ -13,7 +13,7 @@ import { Box as Box7, useApp } from "ink";
 
 // src/screens/ChannelList.jsx
 import React4, { useState, useEffect, memo, useCallback as useCallback2 } from "react";
-import { Box as Box4, Text as Text3, useInput } from "ink";
+import { Box as Box4, Text as Text3, useInput, useStdout as useStdout3 } from "ink";
 import TextInput from "ink-text-input";
 
 // src/components/Header.jsx
@@ -770,14 +770,16 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
   const [filterText, setFilterText] = useState("");
   const [isFiltering, setIsFiltering] = useState(false);
   const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? true);
+  const { stdout } = useStdout3();
+  const terminalHeight = stdout?.rows || 24;
+  const visibleCount = Math.max(5, Math.floor((terminalHeight - 6) * 0.95));
   const filteredSubs = filterText ? subscriptions.filter((s) => s.name.toLowerCase().includes(filterText.toLowerCase())) : subscriptions;
-  const VISIBLE_COUNT = 30;
-  const visibleChannels = filteredSubs.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
+  const visibleChannels = filteredSubs.slice(scrollOffset, scrollOffset + visibleCount);
   useEffect(() => {
     if (savedIndex > 0 && subscriptions.length > 0) {
       setSelectedIndex(savedIndex);
-      if (savedIndex >= VISIBLE_COUNT) {
-        setScrollOffset(savedIndex - Math.floor(VISIBLE_COUNT / 2));
+      if (savedIndex >= visibleCount) {
+        setScrollOffset(savedIndex - Math.floor(visibleCount / 2));
       }
     }
   }, [savedIndex, subscriptions.length]);
@@ -918,7 +920,8 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
     } else if (input === "w" && filteredSubs.length > 0) {
       const channel = filteredSubs[selectedIndex];
       const videos = getStoredVideos(channel.id);
-      const videoIds = videos.map((v) => v.id);
+      const filteredVideos = hideShorts ? videos.filter((v) => !v.isShort) : videos;
+      const videoIds = filteredVideos.map((v) => v.id);
       const count = markChannelAllWatched(videoIds);
       setNewCounts(getNewVideoCounts(hideShorts));
       setFullyWatched(getFullyWatchedChannels(hideShorts));
@@ -936,8 +939,8 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
     } else if (key.downArrow || input === "j") {
       setSelectedIndex((i) => {
         const newIndex = Math.min(filteredSubs.length - 1, i + 1);
-        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
-          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        if (newIndex >= scrollOffset + visibleCount) {
+          setScrollOffset(newIndex - visibleCount + 1);
         }
         return newIndex;
       });
@@ -1153,7 +1156,8 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
           if (filteredSubs.length > 0) {
             const channel = filteredSubs[selectedIndex];
             const videos = getStoredVideos(channel.id);
-            const videoIds = videos.map((v) => v.id);
+            const filteredVideos = hideShorts ? videos.filter((v) => !v.isShort) : videos;
+            const videoIds = filteredVideos.map((v) => v.id);
             const count = markChannelAllWatched(videoIds);
             setNewCounts(getNewVideoCounts(hideShorts));
             setFullyWatched(getFullyWatchedChannels(hideShorts));
@@ -1195,7 +1199,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
 
 // src/screens/VideoList.jsx
 import React5, { useState as useState2, useEffect as useEffect2, useCallback as useCallback3, useRef as useRef3, memo as memo2 } from "react";
-import { Box as Box5, Text as Text4, useInput as useInput2, useStdout as useStdout3 } from "ink";
+import { Box as Box5, Text as Text4, useInput as useInput2, useStdout as useStdout4 } from "ink";
 
 // src/lib/player.js
 import { execa as execa2 } from "execa";
@@ -1346,8 +1350,10 @@ function VideoList({ channel, onBack }) {
   const [pageSize, setPageSize] = useState2(100);
   const [mode, setMode] = useState2("list");
   const channelIdsRef = useRef3(null);
-  const { stdout } = useStdout3();
+  const { stdout } = useStdout4();
   const terminalWidth = stdout?.columns || 80;
+  const terminalHeight = stdout?.rows || 24;
+  const visibleCount = Math.max(5, Math.floor((terminalHeight - 6) * 0.95));
   const filteredVideos = allVideos.filter((v) => {
     if (hideShorts && v.isShort) return false;
     if (filterText) {
@@ -1356,8 +1362,7 @@ function VideoList({ channel, onBack }) {
     }
     return true;
   });
-  const VISIBLE_COUNT = 30;
-  const visibleVideos = filteredVideos.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
+  const visibleVideos = filteredVideos.slice(scrollOffset, scrollOffset + visibleCount);
   const totalPages = Math.ceil(totalVideos / pageSize);
   const initialLoad = useCallback3(async () => {
     setLoading(true);
@@ -1500,8 +1505,8 @@ function VideoList({ channel, onBack }) {
     } else if (key.downArrow || input === "j") {
       setSelectedIndex((i) => {
         const newIndex = Math.min(filteredVideos.length - 1, i + 1);
-        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
-          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        if (newIndex >= scrollOffset + visibleCount) {
+          setScrollOffset(newIndex - visibleCount + 1);
         }
         return newIndex;
       });
@@ -1691,7 +1696,7 @@ function VideoList({ channel, onBack }) {
 
 // src/screens/SearchResults.jsx
 import React6, { useState as useState3, useEffect as useEffect3, memo as memo3, useCallback as useCallback4 } from "react";
-import { Box as Box6, Text as Text5, useInput as useInput3, useStdout as useStdout4 } from "ink";
+import { Box as Box6, Text as Text5, useInput as useInput3, useStdout as useStdout5 } from "ink";
 import TextInput2 from "ink-text-input";
 import { Fragment as Fragment4, jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
 var VideoRow3 = memo3(function VideoRow4({
@@ -1722,10 +1727,11 @@ function SearchResults({ query, onBack, onNewSearch }) {
   const [message, setMessage] = useState3(null);
   const [playing, setPlaying] = useState3(false);
   const [mode, setMode] = useState3("list");
-  const { stdout } = useStdout4();
+  const { stdout } = useStdout5();
   const terminalWidth = stdout?.columns || 80;
-  const VISIBLE_COUNT = 30;
-  const visibleVideos = results.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
+  const terminalHeight = stdout?.rows || 24;
+  const visibleCount = Math.max(5, Math.floor((terminalHeight - 6) * 0.95));
+  const visibleVideos = results.slice(scrollOffset, scrollOffset + visibleCount);
   useEffect3(() => {
     const search = async () => {
       setLoading(true);
@@ -1795,8 +1801,8 @@ function SearchResults({ query, onBack, onNewSearch }) {
     } else if (key.downArrow || input === "j") {
       setSelectedIndex((i) => {
         const newIndex = Math.min(results.length - 1, i + 1);
-        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
-          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        if (newIndex >= scrollOffset + visibleCount) {
+          setScrollOffset(newIndex - visibleCount + 1);
         }
         return newIndex;
       });
