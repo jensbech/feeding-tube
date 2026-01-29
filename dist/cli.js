@@ -79,21 +79,27 @@ import { Box as Box3 } from "ink";
 import { useOnClick as useOnClick2 } from "@ink-tools/ink-mouse";
 import { jsx as jsx3 } from "react/jsx-runtime";
 var DOUBLE_CLICK_THRESHOLD = 400;
+var globalLastClickTime = 0;
+var globalLastClickIndex = -1;
+var globalClickLock = false;
 function ClickableRow({ index, onSelect, onActivate, children }) {
   const ref = useRef2(null);
-  const lastClickTime = useRef2(0);
-  const lastClickIndex = useRef2(-1);
   const handleClick = useCallback(() => {
+    if (globalClickLock) return;
+    globalClickLock = true;
+    setTimeout(() => {
+      globalClickLock = false;
+    }, 50);
     const now = Date.now();
-    const timeDiff = now - lastClickTime.current;
-    if (timeDiff < DOUBLE_CLICK_THRESHOLD && lastClickIndex.current === index) {
+    const timeDiff = now - globalLastClickTime;
+    if (timeDiff < DOUBLE_CLICK_THRESHOLD && globalLastClickIndex === index) {
       onActivate?.(index);
-      lastClickTime.current = 0;
-      lastClickIndex.current = -1;
+      globalLastClickTime = 0;
+      globalLastClickIndex = -1;
     } else {
       onSelect?.(index);
-      lastClickTime.current = now;
-      lastClickIndex.current = index;
+      globalLastClickTime = now;
+      globalLastClickIndex = index;
     }
   }, [index, onSelect, onActivate]);
   useOnClick2(ref, handleClick);
@@ -113,7 +119,7 @@ var DEFAULT_CONFIG = {
   settings: {
     player: "mpv",
     videosPerChannel: 15,
-    hideShorts: false
+    hideShorts: true
   }
 };
 function ensureConfig() {
@@ -373,13 +379,14 @@ function markAllChannelsViewed(channelIds) {
   }
   saveConfig(config);
 }
-function getNewVideoCounts() {
+function getNewVideoCounts(hideShorts = false) {
   const config = loadConfig();
   const channelLastViewed = config.channelLastViewed || {};
   const store = loadVideoStore();
   const counts = /* @__PURE__ */ new Map();
   for (const video of Object.values(store.videos)) {
     if (video.publishedDate && video.channelId) {
+      if (hideShorts && video.isShort) continue;
       const lastViewed = channelLastViewed[video.channelId];
       if (!lastViewed || video.publishedDate > lastViewed) {
         const current = counts.get(video.channelId) || 0;
@@ -389,13 +396,14 @@ function getNewVideoCounts() {
   }
   return counts;
 }
-function getFullyWatchedChannels() {
+function getFullyWatchedChannels(hideShorts = false) {
   const store = loadVideoStore();
   const watched = loadWatched();
   const watchedIds = new Set(Object.keys(watched.videos));
   const channelVideos = /* @__PURE__ */ new Map();
   for (const video of Object.values(store.videos)) {
     if (video.channelId) {
+      if (hideShorts && video.isShort) continue;
       if (!channelVideos.has(video.channelId)) {
         channelVideos.set(video.channelId, []);
       }
@@ -481,36 +489,15 @@ async function fetchChannelRSS(channelId, channelName) {
 }
 async function fetchAllChannelsRSS(subscriptions) {
   if (subscriptions.length === 0) return [];
-  try {
-    const urls = subscriptions.map(
-      (sub) => `https://www.youtube.com/feeds/videos.xml?channel_id=${sub.id}`
-    );
-    const { stdout } = await execa("curl", [
-      "-s",
-      "--parallel",
-      "--parallel-max",
-      "20",
-      ...urls.flatMap((url) => ["-o", "-", url])
-    ], { maxBuffer: 50 * 1024 * 1024 });
-    const feeds = stdout.split(/(?=<\?xml)/);
-    const allVideos = [];
-    for (let i = 0; i < feeds.length; i++) {
-      const feed = feeds[i];
-      if (!feed.trim()) continue;
-      const feedChannelId = feed.match(/<yt:channelId>([^<]+)<\/yt:channelId>/)?.[1];
-      const sub = subscriptions.find((s) => s.id === feedChannelId);
-      if (sub) {
-        const videos = parseRSSFeed(feed, sub.id, sub.name);
-        allVideos.push(...videos);
-      }
-    }
-    return allVideos;
-  } catch (err) {
-    console.error("Bulk RSS fetch failed, falling back to individual:", err.message);
-    const promises = subscriptions.map((sub) => fetchChannelRSS(sub.id, sub.name));
+  const batchSize = 20;
+  const allVideos = [];
+  for (let i = 0; i < subscriptions.length; i += batchSize) {
+    const batch = subscriptions.slice(i, i + batchSize);
+    const promises = batch.map((sub) => fetchChannelRSS(sub.id, sub.name));
     const results = await Promise.all(promises);
-    return results.flat();
+    allVideos.push(...results.flat());
   }
+  return allVideos;
 }
 function parseRSSFeed(xml, channelId, channelName) {
   const entries = [];
@@ -741,7 +728,7 @@ var ChannelRow = memo(function ChannelRow2({ name, isSelected, hasNew, isFullyWa
 function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, skipRefresh, onRefreshDone, savedIndex }) {
   const [subscriptions, setSubscriptions] = useState([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [page, setPage] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [mode, setMode] = useState("list");
   const [addUrl, setAddUrl] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -754,37 +741,41 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
   const [fullyWatched, setFullyWatched] = useState(/* @__PURE__ */ new Set());
   const [filterText, setFilterText] = useState("");
   const [isFiltering, setIsFiltering] = useState(false);
+  const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? true);
   const filteredSubs = filterText ? subscriptions.filter((s) => s.name.toLowerCase().includes(filterText.toLowerCase())) : subscriptions;
-  const PAGE_SIZE = 30;
-  const totalPages = Math.ceil(filteredSubs.length / PAGE_SIZE);
-  const startIdx = page * PAGE_SIZE;
-  const visibleChannels = filteredSubs.slice(startIdx, startIdx + PAGE_SIZE);
+  const VISIBLE_COUNT = 30;
+  const visibleChannels = filteredSubs.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
   useEffect(() => {
     if (savedIndex > 0 && subscriptions.length > 0) {
-      const targetPage = Math.floor(savedIndex / PAGE_SIZE);
-      setPage(targetPage);
-      setSelectedIndex(savedIndex - targetPage * PAGE_SIZE);
+      setSelectedIndex(savedIndex);
+      if (savedIndex >= VISIBLE_COUNT) {
+        setScrollOffset(savedIndex - Math.floor(VISIBLE_COUNT / 2));
+      }
     }
   }, [savedIndex, subscriptions.length]);
   useEffect(() => {
     const init = async () => {
       const subs = getSubscriptions();
       setSubscriptions(subs);
-      setNewCounts(getNewVideoCounts());
-      setFullyWatched(getFullyWatchedChannels());
+      setNewCounts(getNewVideoCounts(hideShorts));
+      setFullyWatched(getFullyWatchedChannels(hideShorts));
       if (subs.length > 0 && !skipRefresh) {
         setLoading(true);
-        setLoadingMessage("Refreshing...");
+        setLoadingMessage("Checking for new videos...");
         await refreshAllVideos(subs);
         setLoading(false);
         setLoadingMessage("");
         onRefreshDone?.();
-        setNewCounts(getNewVideoCounts());
-        setFullyWatched(getFullyWatchedChannels());
+        setNewCounts(getNewVideoCounts(hideShorts));
+        setFullyWatched(getFullyWatchedChannels(hideShorts));
       }
     };
     init();
   }, []);
+  useEffect(() => {
+    setNewCounts(getNewVideoCounts(hideShorts));
+    setFullyWatched(getFullyWatchedChannels(hideShorts));
+  }, [hideShorts]);
   useEffect(() => {
     if (message || error) {
       const timer = setTimeout(() => {
@@ -802,17 +793,17 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
         setIsFiltering(false);
         setFilterText("");
         setSelectedIndex(0);
-        setPage(0);
+        setScrollOffset(0);
       } else if (key.return) {
         setIsFiltering(false);
       } else if (key.backspace || key.delete) {
         setFilterText((t) => t.slice(0, -1));
         setSelectedIndex(0);
-        setPage(0);
+        setScrollOffset(0);
       } else if (input && !key.ctrl && !key.meta) {
         setFilterText((t) => t + input);
         setSelectedIndex(0);
-        setPage(0);
+        setScrollOffset(0);
       }
       return;
     }
@@ -865,7 +856,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
       if (filterText) {
         setFilterText("");
         setSelectedIndex(0);
-        setPage(0);
+        setScrollOffset(0);
       }
     } else if (input === "a") {
       setMode("add");
@@ -875,45 +866,55 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
       setSearchQuery("");
     } else if (input === "/") {
       setIsFiltering(true);
-    } else if (input === "d" && visibleChannels.length > 0) {
+    } else if (input === "d" && filteredSubs.length > 0) {
       setMode("confirm-delete");
     } else if (input === "v") {
       onBrowseAll();
     } else if (input === "r" && subscriptions.length > 0 && !loading) {
       const refresh = async () => {
         setLoading(true);
-        setLoadingMessage("Refreshing...");
+        setLoadingMessage("Checking for new videos...");
         await refreshAllVideos(subscriptions);
-        setNewCounts(getNewVideoCounts());
-        setFullyWatched(getFullyWatchedChannels());
+        setNewCounts(getNewVideoCounts(hideShorts));
+        setFullyWatched(getFullyWatchedChannels(hideShorts));
         setLoading(false);
         setLoadingMessage("");
         setMessage("Refreshed");
       };
       refresh();
+    } else if (input === "s") {
+      const newValue = !hideShorts;
+      setHideShorts(newValue);
+      updateSettings({ hideShorts: newValue });
+      setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
     } else if (input === "m") {
       setMode("confirm-mark-all");
-    } else if (input === "n" && totalPages > 1 && page < totalPages - 1) {
-      setPage((p) => p + 1);
-      setSelectedIndex(0);
-    } else if (input === "p" && totalPages > 1 && page > 0) {
-      setPage((p) => p - 1);
-      setSelectedIndex(0);
     } else if (key.upArrow || input === "k") {
-      setSelectedIndex((i) => Math.max(0, i - 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.max(0, i - 1);
+        if (newIndex < scrollOffset) {
+          setScrollOffset(newIndex);
+        }
+        return newIndex;
+      });
     } else if (key.downArrow || input === "j") {
-      setSelectedIndex((i) => Math.min(visibleChannels.length - 1, i + 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.min(filteredSubs.length - 1, i + 1);
+        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
+          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        }
+        return newIndex;
+      });
     } else if (key.return) {
-      if (visibleChannels.length > 0) {
-        const channel = visibleChannels[selectedIndex];
-        const globalIndex = subscriptions.findIndex((s) => s.id === channel.id);
+      if (filteredSubs.length > 0) {
+        const channel = filteredSubs[selectedIndex];
         updateChannelLastViewed(channel.id);
         setNewCounts((prev) => {
           const next = new Map(prev);
           next.delete(channel.id);
           return next;
         });
-        onSelectChannel(channel, globalIndex);
+        onSelectChannel(channel, selectedIndex);
       }
     }
   });
@@ -968,10 +969,9 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
     }
   };
   const handleDelete = () => {
-    if (visibleChannels.length === 0) return;
-    const channel = visibleChannels[selectedIndex];
-    const globalIndex = subscriptions.findIndex((s) => s.id === channel.id);
-    const result = removeSubscription(globalIndex);
+    if (filteredSubs.length === 0) return;
+    const channel = filteredSubs[selectedIndex];
+    const result = removeSubscription(channel.id);
     if (result.success) {
       setSubscriptions(getSubscriptions());
       setMessage(`Removed: ${channel.name}`);
@@ -990,25 +990,24 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
     setSearchQuery("");
     onGlobalSearch(query.trim());
   };
-  const handleRowSelect = useCallback2((index) => {
-    setSelectedIndex(index);
-  }, []);
-  const handleRowActivate = useCallback2((index) => {
-    if (visibleChannels.length === 0 || mode !== "list") return;
-    const channel = visibleChannels[index];
-    const globalIndex = subscriptions.findIndex((s) => s.id === channel.id);
+  const handleRowSelect = useCallback2((visibleIndex) => {
+    setSelectedIndex(scrollOffset + visibleIndex);
+  }, [scrollOffset]);
+  const handleRowActivate = useCallback2((visibleIndex) => {
+    if (filteredSubs.length === 0 || mode !== "list") return;
+    const actualIndex = scrollOffset + visibleIndex;
+    const channel = filteredSubs[actualIndex];
     updateChannelLastViewed(channel.id);
     setNewCounts((prev) => {
       const next = new Map(prev);
       next.delete(channel.id);
       return next;
     });
-    onSelectChannel(channel, globalIndex);
-  }, [visibleChannels, subscriptions, mode, onSelectChannel]);
+    onSelectChannel(channel, actualIndex);
+  }, [filteredSubs, scrollOffset, mode, onSelectChannel]);
   const countText = `${subscriptions.length} subscription${subscriptions.length !== 1 ? "s" : ""}`;
   const filterInfo = filterText ? ` (filter: "${filterText}")` : "";
-  const pageInfo = totalPages > 1 ? ` [${page + 1}/${totalPages}]` : "";
-  const subtitle = loading ? `${countText}${filterInfo}${pageInfo} - ${loadingMessage}` : `${countText}${filterInfo}${pageInfo}`;
+  const subtitle = loading ? `${countText}${filterInfo} - ${loadingMessage}` : `${countText}${filterInfo}`;
   return /* @__PURE__ */ jsxs3(Box4, { flexDirection: "column", children: [
     /* @__PURE__ */ jsx4(
       Header,
@@ -1048,9 +1047,9 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
       ] }),
       /* @__PURE__ */ jsx4(Text3, { color: "gray", children: "Press ESC to cancel" })
     ] }),
-    mode === "confirm-delete" && visibleChannels.length > 0 && /* @__PURE__ */ jsx4(Box4, { flexDirection: "column", children: /* @__PURE__ */ jsxs3(Text3, { color: "red", children: [
+    mode === "confirm-delete" && filteredSubs.length > 0 && /* @__PURE__ */ jsx4(Box4, { flexDirection: "column", children: /* @__PURE__ */ jsxs3(Text3, { color: "red", children: [
       'Delete "',
-      visibleChannels[selectedIndex].name,
+      filteredSubs[selectedIndex]?.name,
       '"? (y/N)'
     ] }) }),
     mode === "confirm-prime" && pendingChannel && /* @__PURE__ */ jsxs3(Box4, { flexDirection: "column", children: [
@@ -1067,6 +1066,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
     ] }) : visibleChannels.map((sub, index) => {
       const hasNew = newCounts.get(sub.id) > 0;
       const isFullyWatched = fullyWatched.has(sub.id);
+      const actualIndex = scrollOffset + index;
       return /* @__PURE__ */ jsx4(
         ClickableRow,
         {
@@ -1077,7 +1077,7 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
             ChannelRow,
             {
               name: sub.name,
-              isSelected: index === selectedIndex,
+              isSelected: actualIndex === selectedIndex,
               hasNew,
               isFullyWatched
             }
@@ -1110,14 +1110,20 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
           setSearchQuery("");
         } }),
         /* @__PURE__ */ jsx4(KeyHint, { keyName: "/", description: " filter", onClick: () => setIsFiltering(true) }),
+        /* @__PURE__ */ jsx4(KeyHint, { keyName: "s", description: hideShorts ? " +shorts" : " -shorts", onClick: () => {
+          const newValue = !hideShorts;
+          setHideShorts(newValue);
+          updateSettings({ hideShorts: newValue });
+          setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
+        } }),
         /* @__PURE__ */ jsx4(KeyHint, { keyName: "r", description: "efresh", onClick: () => {
           if (subscriptions.length > 0 && !loading) {
             const refresh = async () => {
               setLoading(true);
-              setLoadingMessage("Refreshing...");
+              setLoadingMessage("Checking for new videos...");
               await refreshAllVideos(subscriptions);
-              setNewCounts(getNewVideoCounts());
-              setFullyWatched(getFullyWatchedChannels());
+              setNewCounts(getNewVideoCounts(hideShorts));
+              setFullyWatched(getFullyWatchedChannels(hideShorts));
               setLoading(false);
               setLoadingMessage("");
               setMessage("Refreshed");
@@ -1125,20 +1131,6 @@ function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSearch, onQuit, ski
             refresh();
           }
         } }),
-        totalPages > 1 && /* @__PURE__ */ jsxs3(Fragment2, { children: [
-          /* @__PURE__ */ jsx4(KeyHint, { keyName: "n", description: "ext", onClick: () => {
-            if (page < totalPages - 1) {
-              setPage((p) => p + 1);
-              setSelectedIndex(0);
-            }
-          } }),
-          /* @__PURE__ */ jsx4(KeyHint, { keyName: "p", description: "rev", onClick: () => {
-            if (page > 0) {
-              setPage((p) => p - 1);
-              setSelectedIndex(0);
-            }
-          } })
-        ] }),
         /* @__PURE__ */ jsx4(KeyHint, { keyName: "q", description: "uit", onClick: onQuit })
       ] }) })
     ] })
@@ -1211,7 +1203,6 @@ async function playVideo(videoUrl, videoId) {
   try {
     if (player === "mpv") {
       const subprocess2 = execa2("mpv", [
-        "--ytdl-format=bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "--force-window=immediate",
         "--keep-open=no",
         videoUrl
@@ -1285,18 +1276,18 @@ function VideoList({ channel, onBack }) {
   const [allVideos, setAllVideos] = useState2([]);
   const [watchedIds, setWatchedIds] = useState2(() => getWatchedIds());
   const [selectedIndex, setSelectedIndex] = useState2(0);
+  const [scrollOffset, setScrollOffset] = useState2(0);
   const [loading, setLoading] = useState2(true);
   const [error, setError] = useState2(null);
   const [message, setMessage] = useState2(null);
   const [playing, setPlaying] = useState2(false);
-  const [hideShorts, setHideShorts] = useState2(() => getSettings().hideShorts ?? false);
+  const [hideShorts, setHideShorts] = useState2(() => getSettings().hideShorts ?? true);
   const [filterText, setFilterText] = useState2("");
   const [isFiltering, setIsFiltering] = useState2(false);
   const [currentPage, setCurrentPage] = useState2(0);
   const [totalVideos, setTotalVideos] = useState2(0);
   const [pageSize, setPageSize] = useState2(100);
   const [mode, setMode] = useState2("list");
-  const [displayPage, setDisplayPage] = useState2(0);
   const channelIdsRef = useRef3(null);
   const { stdout } = useStdout3();
   const terminalWidth = stdout?.columns || 80;
@@ -1308,10 +1299,8 @@ function VideoList({ channel, onBack }) {
     }
     return true;
   });
-  const DISPLAY_PAGE_SIZE = 30;
-  const displayTotalPages = Math.ceil(filteredVideos.length / DISPLAY_PAGE_SIZE);
-  const displayStartIdx = displayPage * DISPLAY_PAGE_SIZE;
-  const visibleVideos = filteredVideos.slice(displayStartIdx, displayStartIdx + DISPLAY_PAGE_SIZE);
+  const VISIBLE_COUNT = 30;
+  const visibleVideos = filteredVideos.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
   const totalPages = Math.ceil(totalVideos / pageSize);
   const initialLoad = useCallback3(async () => {
     setLoading(true);
@@ -1380,17 +1369,17 @@ function VideoList({ channel, onBack }) {
         setIsFiltering(false);
         setFilterText("");
         setSelectedIndex(0);
-        setDisplayPage(0);
+        setScrollOffset(0);
       } else if (key.return) {
         setIsFiltering(false);
       } else if (key.backspace || key.delete) {
         setFilterText((t) => t.slice(0, -1));
         setSelectedIndex(0);
-        setDisplayPage(0);
+        setScrollOffset(0);
       } else if (input && !key.ctrl && !key.meta) {
         setFilterText((t) => t + input);
         setSelectedIndex(0);
-        setDisplayPage(0);
+        setScrollOffset(0);
       }
       return;
     }
@@ -1410,60 +1399,66 @@ function VideoList({ channel, onBack }) {
       if (filterText) {
         setFilterText("");
         setSelectedIndex(0);
-        setDisplayPage(0);
+        setScrollOffset(0);
       } else {
         onBack();
       }
     } else if (input === "q") {
       process.exit(0);
     } else if (input === "r" && !loading) {
-      setDisplayPage(0);
+      setScrollOffset(0);
       initialLoad();
     } else if (input === "s") {
       const newValue = !hideShorts;
       setHideShorts(newValue);
       updateSettings({ hideShorts: newValue });
       setSelectedIndex(0);
-      setDisplayPage(0);
+      setScrollOffset(0);
       setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
     } else if (input === "/") {
       setIsFiltering(true);
-    } else if (input === "n") {
-      if (channel) {
-        if (displayPage < displayTotalPages - 1) {
-          setDisplayPage((p) => p + 1);
-          setSelectedIndex(0);
-        }
-      } else if (currentPage < totalPages - 1) {
-        setCurrentPage((p) => p + 1);
-      }
-    } else if (input === "p") {
-      if (channel) {
-        if (displayPage > 0) {
-          setDisplayPage((p) => p - 1);
-          setSelectedIndex(0);
-        }
-      } else if (currentPage > 0) {
-        setCurrentPage((p) => p - 1);
-      }
-    } else if (input === "w" && visibleVideos.length > 0) {
-      const video = visibleVideos[selectedIndex];
+    } else if (input === "n" && !channel && currentPage < totalPages - 1) {
+      setCurrentPage((p) => p + 1);
+      setSelectedIndex(0);
+      setScrollOffset(0);
+    } else if (input === "p" && !channel && currentPage > 0) {
+      setCurrentPage((p) => p - 1);
+      setSelectedIndex(0);
+      setScrollOffset(0);
+    } else if (input === "w" && filteredVideos.length > 0) {
+      const video = filteredVideos[selectedIndex];
       const nowWatched = toggleWatched(video.id);
       setWatchedIds(getWatchedIds());
       setMessage(nowWatched ? "Marked as watched" : "Marked as unwatched");
-    } else if (input === "m" && channel && visibleVideos.length > 0) {
+    } else if (input === "m" && channel && filteredVideos.length > 0) {
       setMode("confirm-mark-all");
     } else if (key.upArrow || input === "k") {
-      setSelectedIndex((i) => Math.max(0, i - 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.max(0, i - 1);
+        if (newIndex < scrollOffset) {
+          setScrollOffset(newIndex);
+        }
+        return newIndex;
+      });
     } else if (key.downArrow || input === "j") {
-      setSelectedIndex((i) => Math.min(visibleVideos.length - 1, i + 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.min(filteredVideos.length - 1, i + 1);
+        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
+          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        }
+        return newIndex;
+      });
     } else if (key.return && !loading) {
       handlePlay();
     }
   });
   const handlePlay = async () => {
-    if (visibleVideos.length === 0) return;
-    const video = visibleVideos[selectedIndex];
+    if (filteredVideos.length === 0) return;
+    const video = filteredVideos[selectedIndex];
+    if (!video || !video.url) {
+      setError("No video selected");
+      return;
+    }
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
     const result = await playVideo(video.url, video.id);
@@ -1475,13 +1470,17 @@ function VideoList({ channel, onBack }) {
     }
     setPlaying(false);
   };
-  const handleRowSelect = useCallback3((index) => {
-    setSelectedIndex(index);
-  }, []);
-  const handleRowActivate = useCallback3(async (index) => {
-    if (visibleVideos.length === 0 || playing || loading) return;
-    const video = visibleVideos[index];
-    setSelectedIndex(index);
+  const handleRowSelect = useCallback3((visibleIndex) => {
+    setSelectedIndex(scrollOffset + visibleIndex);
+  }, [scrollOffset]);
+  const handleRowActivate = useCallback3(async (visibleIndex) => {
+    if (filteredVideos.length === 0 || playing || loading) return;
+    const actualIndex = scrollOffset + visibleIndex;
+    const video = filteredVideos[actualIndex];
+    if (!video || !video.url) {
+      return;
+    }
+    setSelectedIndex(actualIndex);
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
     const result = await playVideo(video.url, video.id);
@@ -1492,7 +1491,7 @@ function VideoList({ channel, onBack }) {
       setError(`Failed to play: ${result.error}`);
     }
     setPlaying(false);
-  }, [visibleVideos, playing, loading]);
+  }, [filteredVideos, scrollOffset, playing, loading]);
   const truncate = (text, maxLen) => {
     if (!text) return "";
     return text.length > maxLen ? text.slice(0, maxLen - 1) + "\u2026" : text;
@@ -1509,7 +1508,7 @@ function VideoList({ channel, onBack }) {
   const titleColWidth = availableWidth - 2 - channelColWidth - dateColWidth - 2;
   const title = channel ? channel.name : "All Videos";
   const filterInfo = filterText ? ` (filter: "${filterText}")` : "";
-  const pageInfo = channel ? displayTotalPages > 1 ? ` [${displayPage + 1}/${displayTotalPages}]` : "" : totalVideos > 0 ? ` [${currentPage + 1}/${totalPages}]` : "";
+  const pageInfo = !channel && totalPages > 1 ? ` [${currentPage + 1}/${totalPages}]` : "";
   const loadingInfo = loading ? " - Refreshing..." : "";
   const subtitle = `${filteredVideos.length} video${filteredVideos.length !== 1 ? "s" : ""}${filterInfo}${pageInfo}${loadingInfo}`;
   return /* @__PURE__ */ jsxs4(Box5, { flexDirection: "column", children: [
@@ -1522,7 +1521,8 @@ function VideoList({ channel, onBack }) {
     error && !filteredVideos.length && /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsx5(Text4, { color: "red", children: error }) }),
     !loading && filteredVideos.length === 0 && !error && /* @__PURE__ */ jsx5(Text4, { color: "gray", children: "No videos found." }),
     filteredVideos.length > 0 && /* @__PURE__ */ jsx5(Box5, { flexDirection: "column", children: visibleVideos.map((video, index) => {
-      const isSelected = index === selectedIndex;
+      const actualIndex = scrollOffset + index;
+      const isSelected = actualIndex === selectedIndex;
       const isWatched = watchedIds.has(video.id);
       const pointer = isSelected ? ">" : " ";
       const channelText = showChannel ? pad(truncate(video.channelName, channelColWidth - 1), channelColWidth) : "";
@@ -1561,8 +1561,8 @@ function VideoList({ channel, onBack }) {
       ] }) : /* @__PURE__ */ jsxs4(Fragment3, { children: [
         /* @__PURE__ */ jsx5(KeyHint, { keyName: "Enter", description: " play", onClick: handlePlay }),
         /* @__PURE__ */ jsx5(KeyHint, { keyName: "w", description: "atched", onClick: () => {
-          if (visibleVideos.length > 0) {
-            const video = visibleVideos[selectedIndex];
+          if (filteredVideos.length > 0) {
+            const video = filteredVideos[selectedIndex];
             const nowWatched = toggleWatched(video.id);
             setWatchedIds(getWatchedIds());
             setMessage(nowWatched ? "Marked as watched" : "Marked as unwatched");
@@ -1575,34 +1575,28 @@ function VideoList({ channel, onBack }) {
           setHideShorts(newValue);
           updateSettings({ hideShorts: newValue });
           setSelectedIndex(0);
-          setDisplayPage(0);
+          setScrollOffset(0);
           setMessage(newValue ? "Hiding Shorts" : "Showing all videos");
         } }),
-        (channel ? displayTotalPages > 1 : totalPages > 1) && /* @__PURE__ */ jsxs4(Fragment3, { children: [
+        !channel && totalPages > 1 && /* @__PURE__ */ jsxs4(Fragment3, { children: [
           /* @__PURE__ */ jsx5(KeyHint, { keyName: "n", description: "ext", onClick: () => {
-            if (channel) {
-              if (displayPage < displayTotalPages - 1) {
-                setDisplayPage((p) => p + 1);
-                setSelectedIndex(0);
-              }
-            } else if (currentPage < totalPages - 1) {
+            if (currentPage < totalPages - 1) {
               setCurrentPage((p) => p + 1);
+              setSelectedIndex(0);
+              setScrollOffset(0);
             }
           } }),
           /* @__PURE__ */ jsx5(KeyHint, { keyName: "p", description: "rev", onClick: () => {
-            if (channel) {
-              if (displayPage > 0) {
-                setDisplayPage((p) => p - 1);
-                setSelectedIndex(0);
-              }
-            } else if (currentPage > 0) {
+            if (currentPage > 0) {
               setCurrentPage((p) => p - 1);
+              setSelectedIndex(0);
+              setScrollOffset(0);
             }
           } })
         ] }),
         /* @__PURE__ */ jsx5(KeyHint, { keyName: "r", description: "efresh", onClick: () => {
           if (!loading) {
-            setDisplayPage(0);
+            setScrollOffset(0);
             initialLoad();
           }
         } }),
@@ -1610,7 +1604,7 @@ function VideoList({ channel, onBack }) {
           if (filterText) {
             setFilterText("");
             setSelectedIndex(0);
-            setDisplayPage(0);
+            setScrollOffset(0);
           } else {
             onBack();
           }
@@ -1647,7 +1641,7 @@ function SearchResults({ query, onBack, onNewSearch }) {
   const [results, setResults] = useState3([]);
   const [watchedIds, setWatchedIds] = useState3(() => getWatchedIds());
   const [selectedIndex, setSelectedIndex] = useState3(0);
-  const [displayPage, setDisplayPage] = useState3(0);
+  const [scrollOffset, setScrollOffset] = useState3(0);
   const [loading, setLoading] = useState3(true);
   const [error, setError] = useState3(null);
   const [message, setMessage] = useState3(null);
@@ -1655,16 +1649,14 @@ function SearchResults({ query, onBack, onNewSearch }) {
   const [mode, setMode] = useState3("list");
   const { stdout } = useStdout4();
   const terminalWidth = stdout?.columns || 80;
-  const PAGE_SIZE = 30;
-  const totalPages = Math.ceil(results.length / PAGE_SIZE);
-  const startIdx = displayPage * PAGE_SIZE;
-  const visibleVideos = results.slice(startIdx, startIdx + PAGE_SIZE);
+  const VISIBLE_COUNT = 30;
+  const visibleVideos = results.slice(scrollOffset, scrollOffset + VISIBLE_COUNT);
   useEffect3(() => {
     const search = async () => {
       setLoading(true);
       setError(null);
       setSelectedIndex(0);
-      setDisplayPage(0);
+      setScrollOffset(0);
       try {
         const searchResults = await searchYouTube(currentQuery, 50);
         setResults(searchResults);
@@ -1710,30 +1702,36 @@ function SearchResults({ query, onBack, onNewSearch }) {
     } else if (input === "g") {
       setMode("new-search");
       setSearchInput("");
-    } else if (input === "a" && visibleVideos.length > 0) {
-      const video = visibleVideos[selectedIndex];
+    } else if (input === "a" && results.length > 0) {
+      const video = results[selectedIndex];
       if (video.channelId) {
         setMode("confirm-add");
       } else {
         setError("Cannot add channel - no channel ID available");
       }
-    } else if (input === "n" && totalPages > 1 && displayPage < totalPages - 1) {
-      setDisplayPage((p) => p + 1);
-      setSelectedIndex(0);
-    } else if (input === "p" && totalPages > 1 && displayPage > 0) {
-      setDisplayPage((p) => p - 1);
-      setSelectedIndex(0);
     } else if (key.upArrow || input === "k") {
-      setSelectedIndex((i) => Math.max(0, i - 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.max(0, i - 1);
+        if (newIndex < scrollOffset) {
+          setScrollOffset(newIndex);
+        }
+        return newIndex;
+      });
     } else if (key.downArrow || input === "j") {
-      setSelectedIndex((i) => Math.min(visibleVideos.length - 1, i + 1));
+      setSelectedIndex((i) => {
+        const newIndex = Math.min(results.length - 1, i + 1);
+        if (newIndex >= scrollOffset + VISIBLE_COUNT) {
+          setScrollOffset(newIndex - VISIBLE_COUNT + 1);
+        }
+        return newIndex;
+      });
     } else if (key.return) {
       handlePlay();
     }
   });
   const handlePlay = async () => {
-    if (visibleVideos.length === 0) return;
-    const video = visibleVideos[selectedIndex];
+    if (results.length === 0) return;
+    const video = results[selectedIndex];
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
     const result = await playVideo(video.url, video.id);
@@ -1745,13 +1743,14 @@ function SearchResults({ query, onBack, onNewSearch }) {
     }
     setPlaying(false);
   };
-  const handleRowSelect = useCallback4((index) => {
-    setSelectedIndex(index);
-  }, []);
-  const handleRowActivate = useCallback4(async (index) => {
-    if (visibleVideos.length === 0 || playing || loading) return;
-    const video = visibleVideos[index];
-    setSelectedIndex(index);
+  const handleRowSelect = useCallback4((visibleIndex) => {
+    setSelectedIndex(scrollOffset + visibleIndex);
+  }, [scrollOffset]);
+  const handleRowActivate = useCallback4(async (visibleIndex) => {
+    if (results.length === 0 || playing || loading) return;
+    const actualIndex = scrollOffset + visibleIndex;
+    const video = results[actualIndex];
+    setSelectedIndex(actualIndex);
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
     const result = await playVideo(video.url, video.id);
@@ -1762,9 +1761,9 @@ function SearchResults({ query, onBack, onNewSearch }) {
       setError(`Failed to play: ${result.error}`);
     }
     setPlaying(false);
-  }, [visibleVideos, playing, loading]);
+  }, [results, scrollOffset, playing, loading]);
   const handleAddChannel = async () => {
-    const video = visibleVideos[selectedIndex];
+    const video = results[selectedIndex];
     const subs = getSubscriptions();
     if (subs.some((s) => s.id === video.channelId)) {
       setMessage(`Already subscribed to ${video.channelName}`);
@@ -1806,8 +1805,7 @@ function SearchResults({ query, onBack, onNewSearch }) {
   const durationColWidth = 8;
   const availableWidth = Math.max(terminalWidth - 5, 80);
   const titleColWidth = availableWidth - 2 - channelColWidth - durationColWidth - 2;
-  const pageInfo = totalPages > 1 ? ` [${displayPage + 1}/${totalPages}]` : "";
-  const subtitle = loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} for "${currentQuery}"${pageInfo}`;
+  const subtitle = loading ? "Searching..." : `${results.length} result${results.length !== 1 ? "s" : ""} for "${currentQuery}"`;
   return /* @__PURE__ */ jsxs5(Box6, { flexDirection: "column", children: [
     /* @__PURE__ */ jsx6(Header, { title: "Search YouTube", subtitle, loading }),
     mode === "new-search" && /* @__PURE__ */ jsxs5(Box6, { flexDirection: "column", children: [
@@ -1825,15 +1823,16 @@ function SearchResults({ query, onBack, onNewSearch }) {
       ] }),
       /* @__PURE__ */ jsx6(Text5, { color: "gray", children: "Press ESC to cancel" })
     ] }),
-    mode === "confirm-add" && visibleVideos.length > 0 && /* @__PURE__ */ jsx6(Box6, { children: /* @__PURE__ */ jsxs5(Text5, { color: "cyan", children: [
+    mode === "confirm-add" && results.length > 0 && /* @__PURE__ */ jsx6(Box6, { children: /* @__PURE__ */ jsxs5(Text5, { color: "cyan", children: [
       'Subscribe to "',
-      visibleVideos[selectedIndex].channelName,
+      results[selectedIndex]?.channelName,
       '"? (Y/n)'
     ] }) }),
     error && !results.length && /* @__PURE__ */ jsx6(Box6, { children: /* @__PURE__ */ jsx6(Text5, { color: "red", children: error }) }),
     !loading && results.length === 0 && !error && /* @__PURE__ */ jsx6(Text5, { color: "gray", children: "No results found." }),
     results.length > 0 && mode === "list" && /* @__PURE__ */ jsx6(Box6, { flexDirection: "column", children: visibleVideos.map((video, index) => {
-      const isSelected = index === selectedIndex;
+      const actualIndex = scrollOffset + index;
+      const isSelected = actualIndex === selectedIndex;
       const isWatched = watchedIds.has(video.id);
       const pointer = isSelected ? ">" : " ";
       const channelText = pad(truncate(video.channelName, channelColWidth - 1), channelColWidth);
@@ -1866,8 +1865,8 @@ function SearchResults({ query, onBack, onNewSearch }) {
       /* @__PURE__ */ jsx6(StatusBar, { children: mode === "list" && /* @__PURE__ */ jsxs5(Fragment4, { children: [
         /* @__PURE__ */ jsx6(KeyHint, { keyName: "Enter", description: " play", onClick: handlePlay }),
         /* @__PURE__ */ jsx6(KeyHint, { keyName: "a", description: "dd channel", onClick: () => {
-          if (visibleVideos.length > 0) {
-            const video = visibleVideos[selectedIndex];
+          if (results.length > 0) {
+            const video = results[selectedIndex];
             if (video.channelId) {
               setMode("confirm-add");
             } else {
@@ -1879,20 +1878,6 @@ function SearchResults({ query, onBack, onNewSearch }) {
           setMode("new-search");
           setSearchInput("");
         } }),
-        totalPages > 1 && /* @__PURE__ */ jsxs5(Fragment4, { children: [
-          /* @__PURE__ */ jsx6(KeyHint, { keyName: "n", description: "ext", onClick: () => {
-            if (displayPage < totalPages - 1) {
-              setDisplayPage((p) => p + 1);
-              setSelectedIndex(0);
-            }
-          } }),
-          /* @__PURE__ */ jsx6(KeyHint, { keyName: "p", description: "rev", onClick: () => {
-            if (displayPage > 0) {
-              setDisplayPage((p) => p - 1);
-              setSelectedIndex(0);
-            }
-          } })
-        ] }),
         /* @__PURE__ */ jsx6(KeyHint, { keyName: "b", description: "ack", onClick: onBack }),
         /* @__PURE__ */ jsx6(KeyHint, { keyName: "q", description: "uit", onClick: () => process.exit(0) })
       ] }) })

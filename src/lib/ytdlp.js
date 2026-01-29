@@ -104,47 +104,20 @@ async function fetchChannelRSS(channelId, channelName) {
  */
 async function fetchAllChannelsRSS(subscriptions) {
   if (subscriptions.length === 0) return [];
-  
-  try {
-    const urls = subscriptions.map(
-      (sub) => `https://www.youtube.com/feeds/videos.xml?channel_id=${sub.id}`
-    );
-    
-    // Use curl with --parallel for concurrent fetches in single process
-    // -w '\n---BOUNDARY---\n' adds delimiter between responses
-    const { stdout } = await execa('curl', [
-      '-s',
-      '--parallel',
-      '--parallel-max', '20',
-      ...urls.flatMap((url) => ['-o', '-', url]),
-    ], { maxBuffer: 50 * 1024 * 1024 }); // 50MB buffer for large responses
-    
-    // All responses concatenated - split by XML declaration
-    const feeds = stdout.split(/(?=<\?xml)/);
-    
-    const allVideos = [];
-    for (let i = 0; i < feeds.length; i++) {
-      const feed = feeds[i];
-      if (!feed.trim()) continue;
-      
-      // Extract channel ID from feed to match with subscription
-      const feedChannelId = feed.match(/<yt:channelId>([^<]+)<\/yt:channelId>/)?.[1];
-      const sub = subscriptions.find((s) => s.id === feedChannelId);
-      
-      if (sub) {
-        const videos = parseRSSFeed(feed, sub.id, sub.name);
-        allVideos.push(...videos);
-      }
-    }
-    
-    return allVideos;
-  } catch (err) {
-    // Fallback to individual fetches if bulk fails
-    console.error('Bulk RSS fetch failed, falling back to individual:', err.message);
-    const promises = subscriptions.map((sub) => fetchChannelRSS(sub.id, sub.name));
+
+  // Use Promise.all with individual fetches - more reliable than bulk curl
+  // Fetch in batches of 20 to avoid overwhelming the network
+  const batchSize = 20;
+  const allVideos = [];
+
+  for (let i = 0; i < subscriptions.length; i += batchSize) {
+    const batch = subscriptions.slice(i, i + batchSize);
+    const promises = batch.map((sub) => fetchChannelRSS(sub.id, sub.name));
     const results = await Promise.all(promises);
-    return results.flat();
+    allVideos.push(...results.flat());
   }
+
+  return allVideos;
 }
 
 /**

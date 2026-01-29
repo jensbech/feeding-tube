@@ -12,7 +12,7 @@ const DEFAULT_CONFIG = {
   settings: {
     player: 'mpv',
     videosPerChannel: 15,
-    hideShorts: false,
+    hideShorts: true,
   },
 };
 
@@ -455,16 +455,20 @@ export function markAllChannelsViewed(channelIds) {
 
 /**
  * Count new videos per channel since each channel was last viewed
+ * @param {boolean} hideShorts - If true, exclude shorts from counts
  * @returns {Map<string, number>} Map of channelId -> count of new videos
  */
-export function getNewVideoCounts() {
+export function getNewVideoCounts(hideShorts = false) {
   const config = loadConfig();
   const channelLastViewed = config.channelLastViewed || {};
   const store = loadVideoStore();
   const counts = new Map();
-  
+
   for (const video of Object.values(store.videos)) {
     if (video.publishedDate && video.channelId) {
+      // Skip shorts if hideShorts is enabled
+      if (hideShorts && video.isShort) continue;
+
       const lastViewed = channelLastViewed[video.channelId];
       // If never viewed, or video published after last view
       if (!lastViewed || video.publishedDate > lastViewed) {
@@ -473,30 +477,34 @@ export function getNewVideoCounts() {
       }
     }
   }
-  
+
   return counts;
 }
 
 /**
  * Get channels where all videos have been watched
+ * @param {boolean} hideShorts - If true, exclude shorts from consideration
  * @returns {Set<string>} Set of channelIds where all videos are watched
  */
-export function getFullyWatchedChannels() {
+export function getFullyWatchedChannels(hideShorts = false) {
   const store = loadVideoStore();
   const watched = loadWatched();
   const watchedIds = new Set(Object.keys(watched.videos));
-  
+
   // Group videos by channel
   const channelVideos = new Map();
   for (const video of Object.values(store.videos)) {
     if (video.channelId) {
+      // Skip shorts if hideShorts is enabled
+      if (hideShorts && video.isShort) continue;
+
       if (!channelVideos.has(video.channelId)) {
         channelVideos.set(video.channelId, []);
       }
       channelVideos.get(video.channelId).push(video.id);
     }
   }
-  
+
   // Check which channels have all videos watched
   const fullyWatched = new Set();
   for (const [channelId, videoIds] of channelVideos) {
@@ -504,6 +512,6 @@ export function getFullyWatchedChannels() {
       fullyWatched.add(channelId);
     }
   }
-  
+
   return fullyWatched;
 }
