@@ -107,7 +107,7 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
 
   useInput((input, key) => {
     // Allow navigation even during background loading (but not during blocking operations)
-    const blockingLoad = loading && (mode === 'add' || mode === 'confirm-prime' || mode === 'global-search');
+    const blockingLoad = loading && (mode === 'add' || mode === 'confirm-prime' || mode === 'confirm-prime-all' || mode === 'global-search');
     if (blockingLoad) return;
 
     // Filter mode input handling
@@ -162,6 +162,15 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
         setMode('list');
       } else if (input === 'y' || input === 'Y' || key.return) {
         handlePrime();
+      }
+      return;
+    }
+
+    if (mode === 'confirm-prime-all') {
+      if (input === 'n' || input === 'N' || key.escape) {
+        setMode('list');
+      } else if (input === 'y' || input === 'Y' || key.return) {
+        handlePrimeAll();
       }
       return;
     }
@@ -230,6 +239,9 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       setNewCounts(getNewVideoCounts(hideShorts));
       setFullyWatched(getFullyWatchedChannels(hideShorts));
       setMessage(`Marked ${count} videos as watched in ${channel.name}`);
+    } else if (input === 'p' && subscriptions.length > 0) {
+      // Prime all channels
+      setMode('confirm-prime-all');
     } else if (input === 'm') {
       setMode('confirm-mark-all');
     } else if (key.upArrow || input === 'k') {
@@ -308,11 +320,11 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       const result = await primeChannel(pendingChannel, (done, total) => {
         setLoadingMessage(`Priming ${pendingChannel.name}: ${done}/${total}`);
       });
-      if (result.partial) {
-        setMessage(`Primed ${pendingChannel.name}: ${result.added} videos (partial - some timed out)`);
-      } else {
-        setMessage(`Primed ${pendingChannel.name}: ${result.added} videos added`);
-      }
+      const skippedInfo = result.skipped ? ` (${result.skipped} already cached)` : '';
+      setMessage(`Primed ${pendingChannel.name}: ${result.added} videos added${skippedInfo}`);
+      // Refresh counts after priming
+      setNewCounts(getNewVideoCounts(hideShorts));
+      setFullyWatched(getFullyWatchedChannels(hideShorts));
     } catch (err) {
       setError(`Prime failed: ${err.message}`);
     } finally {
@@ -320,6 +332,41 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
       setPendingChannel(null);
       setMode('list');
     }
+  };
+
+  const handlePrimeAll = async () => {
+    if (subscriptions.length === 0) return;
+
+    setLoading(true);
+    setMode('list');
+    setError(null);
+
+    let totalAdded = 0;
+    let totalSkipped = 0;
+    let failures = 0;
+
+    for (let i = 0; i < subscriptions.length; i++) {
+      const channel = subscriptions[i];
+      setLoadingMessage(`Priming ${i + 1}/${subscriptions.length}: ${channel.name}`);
+
+      try {
+        const result = await primeChannel(channel, (done, total) => {
+          setLoadingMessage(`Priming ${i + 1}/${subscriptions.length}: ${channel.name} (${done}/${total})`);
+        });
+        totalAdded += result.added;
+        totalSkipped += result.skipped || 0;
+      } catch (err) {
+        failures++;
+      }
+    }
+
+    setLoading(false);
+    setLoadingMessage('');
+    setNewCounts(getNewVideoCounts(hideShorts));
+    setFullyWatched(getFullyWatchedChannels(hideShorts));
+
+    const failInfo = failures > 0 ? `, ${failures} failed` : '';
+    setMessage(`Primed all: ${totalAdded} videos added (${totalSkipped} cached${failInfo})`);
   };
 
   const handleDelete = () => {
@@ -439,6 +486,15 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
         </Box>
       )}
 
+      {mode === 'confirm-prime-all' && (
+        <Box flexDirection="column">
+          <Text color="cyan">
+            Prime historical videos for all {subscriptions.length} channels? (Y/n)
+          </Text>
+          <Text color="gray">This fetches all videos from every channel (may take a long time)</Text>
+        </Box>
+      )}
+
       {mode === 'list' && (
         <Box flexDirection="column">
           {subscriptions.length === 0 ? (
@@ -513,6 +569,9 @@ export default function ChannelList({ onSelectChannel, onBrowseAll, onGlobalSear
                   setFullyWatched(getFullyWatchedChannels(hideShorts));
                   setMessage(`Marked ${count} videos as watched in ${channel.name}`);
                 }
+              }} />}
+              {subscriptions.length > 0 && <KeyHint keyName="p" description="rime all" onClick={() => {
+                setMode('confirm-prime-all');
               }} />}
               <KeyHint keyName="v" description="iew all" onClick={onBrowseAll} />
               <KeyHint keyName="g" description="lobal" onClick={() => { setMode('global-search'); setSearchQuery(''); }} />

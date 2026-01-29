@@ -409,66 +409,75 @@ export async function searchYouTube(query, limit = 20) {
  * @returns {Promise<{added: number, total: number, partial: boolean}>}
  */
 export async function primeChannel(channel, onProgress) {
-
   let url = channel.url;
   if (!url.includes('/videos')) {
     url = url.replace(/\/$/, '') + '/videos';
   }
-  
+
   let added = 0;
   let total = 0;
-  let partial = false;
-  
+
+  // Get existing video IDs to skip
+  const existingVideos = getStoredVideos(channel.id);
+  const existingIds = new Set(existingVideos.map((v) => v.id));
+
   try {
-    // First get list of video IDs (fast)
+    // First get list of video IDs (fast) - limit to 5000 videos max
     let videoIds = [];
     try {
       const { stdout: listOut } = await execa('yt-dlp', [
         '--flat-playlist',
         '--print', '%(id)s',
         '--no-warnings',
+        '--extractor-args', 'youtube:skip=dash,hls',
+        '--playlist-end', '5000',
         url,
-      ], { timeout: 120000 });
-      
+      ]);
+
       videoIds = listOut.trim().split('\n').filter(Boolean);
     } catch (listErr) {
-      // If listing times out or fails, we can't continue
-      if (listErr.timedOut) {
-        return { added: 0, total: 0, partial: true, error: 'Timed out fetching video list' };
-      }
       throw listErr;
     }
-    
+
+    // Filter out videos we already have
+    const newVideoIds = videoIds.filter((id) => !existingIds.has(id));
     total = videoIds.length;
-    let processed = 0;
-    
-    if (onProgress) onProgress(0, total);
-    
-    // Process in parallel batches
-    const concurrency = 10;
-    const batchSize = 5;
-    
+    const toFetch = newVideoIds.length;
+
+    if (onProgress) onProgress(0, toFetch);
+
+    if (toFetch === 0) {
+      return { added: 0, total, skipped: existingIds.size };
+    }
+
+    // Process in parallel batches - increased concurrency for speed
+    const concurrency = 20;
+    const batchSize = 10;
+
     // Create batches of video IDs
     const batches = [];
-    for (let i = 0; i < videoIds.length; i += batchSize) {
-      batches.push(videoIds.slice(i, i + batchSize));
+    for (let i = 0; i < newVideoIds.length; i += batchSize) {
+      batches.push(newVideoIds.slice(i, i + batchSize));
     }
-    
+
+    let processed = 0;
+
     // Process batches with limited concurrency
     for (let i = 0; i < batches.length; i += concurrency) {
       const concurrentBatches = batches.slice(i, i + concurrency);
-      
+
       const results = await Promise.all(
         concurrentBatches.map(async (batch) => {
           const urls = batch.map((id) => `https://www.youtube.com/watch?v=${id}`);
-          
+
           try {
             const { stdout } = await execa('yt-dlp', [
               '--dump-json',
               '--no-warnings',
+              '--extractor-args', 'youtube:skip=dash,hls',
               ...urls,
-            ], { timeout: 180000 });
-            
+            ]);
+
             return stdout.trim().split('\n').filter(Boolean).map((line) => {
               const data = JSON.parse(line);
               const uploadDate = data.upload_date;
@@ -477,9 +486,9 @@ export async function primeChannel(channel, onProgress) {
                 parseInt(uploadDate.slice(4, 6), 10) - 1,
                 parseInt(uploadDate.slice(6, 8), 10)
               ) : null;
-              
+
               const isShort = data.duration <= 60 || data.webpage_url?.includes('/shorts/');
-              
+
               return {
                 id: data.id,
                 title: data.title,
@@ -492,31 +501,27 @@ export async function primeChannel(channel, onProgress) {
               };
             });
           } catch (err) {
-            // Timeout or error on batch - mark as partial but continue
-            if (err.timedOut) {
-              partial = true;
-            }
+            // Log error but continue with other batches
             return [];
           }
         })
       );
-      
+
       // Store results incrementally
       const videos = results.flat();
       if (videos.length > 0) {
         storeVideos(videos);
         added += videos.length;
       }
-      
+
       processed += concurrentBatches.reduce((sum, b) => sum + b.length, 0);
-      if (onProgress) onProgress(Math.min(processed, total), total);
+      if (onProgress) onProgress(Math.min(processed, toFetch), toFetch);
     }
-    
-    return { added, total, partial };
+
+    return { added, total, skipped: existingIds.size };
   } catch (error) {
-    // If we got some videos before the error, return partial success
     if (added > 0) {
-      return { added, total, partial: true, error: error.message };
+      return { added, total, skipped: existingIds.size, error: error.message };
     }
     throw new Error(`Failed to prime channel: ${error.message}`);
   }
