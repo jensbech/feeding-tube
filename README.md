@@ -1,4 +1,4 @@
-# ytsub
+# youtube-cli
 
 Terminal UI for browsing YouTube subscriptions. Fast pagination, new video indicators, shorts filtering.
 
@@ -18,12 +18,12 @@ just setup    # or: pnpm build && pnpm link --global
 ## Usage
 
 ```bash
-ytsub              # launch TUI
-ytsub -v           # view all videos
-ytsub -c 1         # view channel 1
-ytsub --add <url>  # add channel
-ytsub --prime      # fetch full history for all channels
-ytsub --list       # list subscriptions
+youtube-cli              # launch TUI
+youtube-cli -v           # view all videos
+youtube-cli -c 1         # view channel 1
+youtube-cli --add <url>  # add channel
+youtube-cli --prime      # fetch full history for all channels
+youtube-cli --list       # list subscriptions
 ```
 
 ## Navigation
@@ -53,7 +53,7 @@ ytsub --list       # list subscriptions
 
 ## Storage
 
-`~/.config/ytsub/`
+`~/.config/youtube-cli/`
 - `subscriptions.json` - channels + settings
 - `videos.json` - video cache
 - `watched.json` - watched video IDs

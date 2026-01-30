@@ -22,4 +22,4 @@ setup: install build link
 
 # uninstall global link
 unlink:
-    pnpm unlink --global ytsub
+    pnpm unlink --global youtube-cli

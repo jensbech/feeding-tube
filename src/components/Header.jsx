@@ -9,7 +9,7 @@ export default function Header({ title, subtitle, hints, loading, loadingMessage
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box>
-        <Text bold color="cyan">ytsub</Text>
+        <Text bold color="cyan">youtube-cli</Text>
         {title && (
           <>
             <Text color="gray"> - </Text>

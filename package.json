@@ -1,11 +1,11 @@
 {
-  "name": "ytsub",
+  "name": "youtube-cli",
   "version": "1.0.0",
   "description": "YouTube subscription manager TUI",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "ytsub": "./dist/cli.js"
+    "youtube-cli": "./dist/cli.js"
   },
   "scripts": {
     "build": "esbuild src/cli.jsx --bundle --platform=node --packages=external --format=esm --outdir=dist --jsx=automatic --out-extension:.js=.js --banner:js='#!/usr/bin/env node' && chmod +x dist/cli.js",
