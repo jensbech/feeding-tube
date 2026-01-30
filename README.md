@@ -8,6 +8,8 @@ Terminal UI for browsing YouTube subscriptions. Fast pagination, new video indic
 - [mpv](https://mpv.io/) (or iina/vlc)
 - Node.js 18+
 
+![screenshot](src/images/screenshot.png)
+
 ## Setup
 
 ```bash
