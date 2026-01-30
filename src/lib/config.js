@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
-const CONFIG_DIR = join(homedir(), '.config', 'ytsub');
+const CONFIG_DIR = join(homedir(), '.config', 'youtube-cli');
 const CONFIG_FILE = join(CONFIG_DIR, 'subscriptions.json');
 const WATCHED_FILE = join(CONFIG_DIR, 'watched.json');
 const VIDEOS_FILE = join(CONFIG_DIR, 'videos.json');

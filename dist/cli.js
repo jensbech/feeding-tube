@@ -26,7 +26,7 @@ function Header({ title, subtitle, hints, loading, loadingMessage, hideShorts, o
   const width = Math.max((stdout?.columns || 80) - 5, 60);
   return /* @__PURE__ */ jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [
     /* @__PURE__ */ jsxs(Box, { children: [
-      /* @__PURE__ */ jsx(Text, { bold: true, color: "cyan", children: "ytsub" }),
+      /* @__PURE__ */ jsx(Text, { bold: true, color: "cyan", children: "youtube-cli" }),
       title && /* @__PURE__ */ jsxs(Fragment, { children: [
         /* @__PURE__ */ jsx(Text, { color: "gray", children: " - " }),
         /* @__PURE__ */ jsx(Text, { bold: true, children: title })
@@ -121,7 +121,7 @@ function ClickableRow({ index, onSelect, onActivate, children }) {
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-var CONFIG_DIR = join(homedir(), ".config", "ytsub");
+var CONFIG_DIR = join(homedir(), ".config", "youtube-cli");
 var CONFIG_FILE = join(CONFIG_DIR, "subscriptions.json");
 var WATCHED_FILE = join(CONFIG_DIR, "watched.json");
 var VIDEOS_FILE = join(CONFIG_DIR, "videos.json");
@@ -2094,11 +2094,11 @@ function App({ initialChannel }) {
 // src/cli.jsx
 var cli = meow(`
   Usage
-    $ ytsub                    Launch the TUI
-    $ ytsub --add <url>        Quick-add a channel
-    $ ytsub --list             List subscriptions (non-interactive)
-    $ ytsub --channel <index>  Start on a specific channel (by index)
-    $ ytsub --prime [query]    Prime historical videos (all or specific channel)
+    $ youtube-cli                    Launch the TUI
+    $ youtube-cli --add <url>        Quick-add a channel
+    $ youtube-cli --list             List subscriptions (non-interactive)
+    $ youtube-cli --channel <index>  Start on a specific channel (by index)
+    $ youtube-cli --prime [query]    Prime historical videos (all or specific channel)
 
   Options
     --add, -a       Add a channel URL directly
@@ -2109,12 +2109,12 @@ var cli = meow(`
     --version       Show version
 
   Examples
-    $ ytsub
-    $ ytsub --add https://youtube.com/@Fireship
-    $ ytsub -c 1
-    $ ytsub --prime            # Prime all channels
-    $ ytsub --prime 3          # Prime channel #3
-    $ ytsub --prime "fireship" # Prime by name
+    $ youtube-cli
+    $ youtube-cli --add https://youtube.com/@Fireship
+    $ youtube-cli -c 1
+    $ youtube-cli --prime            # Prime all channels
+    $ youtube-cli --prime 3          # Prime channel #3
+    $ youtube-cli --prime "fireship" # Prime by name
 
   Navigation
     j/k or arrows   Move up/down
