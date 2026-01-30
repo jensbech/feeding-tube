@@ -1,6 +1,7 @@
-# youtube-cli
-
-Terminal UI for browsing YouTube subscriptions. Fast pagination, new video indicators, shorts filtering.
+A terminal UI for watching YouTube.
+- Add and manage subscriptions.
+- Search and watch any video.
+- Vibe coded.
 
 ## Requirements
 
