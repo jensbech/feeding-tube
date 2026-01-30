@@ -1,4 +1,4 @@
-A terminal UI for watching YouTube.
+# A terminal UI for watching YouTube.
 - Add and manage subscriptions.
 - Search and watch any video.
 - Vibe coded.
