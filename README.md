@@ -2,6 +2,7 @@
 - Add and manage subscriptions
 - Search and watch any video
 - Vibe coded
+- Could break at any time
 
 ## Requirements
 
