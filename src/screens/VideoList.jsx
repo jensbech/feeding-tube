@@ -1,39 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import Header from '../components/Header.jsx';
 import StatusBar, { KeyHint } from '../components/StatusBar.jsx';
 import ClickableRow from '../components/ClickableRow.jsx';
-import { getChannelVideos, refreshAllVideos, getVideoPage } from '../lib/ytdlp.js';
+import DescriptionPanel from '../components/DescriptionPanel.jsx';
+import VideoRow from '../components/VideoRow.jsx';
+import { getChannelVideos, refreshAllVideos, getVideoPage, getVideoDescription } from '../lib/ytdlp.js';
 import { getSubscriptions, getSettings, getWatchedIds, updateSettings, toggleWatched, markChannelAllWatched } from '../lib/config.js';
 import { playVideo } from '../lib/player.js';
-
-// Memoized video row to reduce re-renders
-const VideoRow = memo(function VideoRow({
-  pointer, channelText, titleText, dateText, isSelected, isWatched, showChannel
-}) {
-  const getColor = (defaultColor) => {
-    if (isSelected) return 'cyan';
-    return defaultColor;
-  };
-
-  return (
-    <>
-      <Text color={getColor(undefined)} dimColor={isWatched && !isSelected}>
-        {pointer}
-      </Text>
-      {showChannel && (
-        <Text color={getColor('yellow')} dimColor={isWatched && !isSelected}>{channelText}</Text>
-      )}
-      <Text color={getColor(undefined)} dimColor={isWatched && !isSelected}>
-        {titleText}
-      </Text>
-      <Text color={getColor('gray')}>
-        {dateText}
-      </Text>
-      {!isWatched && <Text color="green"> ●</Text>}
-    </>
-  );
-});
+import { useAutoHideMessage, calculateVisibleRows, truncate, pad } from '../lib/ui.js';
 
 export default function VideoList({ channel, onBack }) {
   const [allVideos, setAllVideos] = useState([]);
@@ -41,8 +16,6 @@ export default function VideoList({ channel, onBack }) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [message, setMessage] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [hideShorts, setHideShorts] = useState(() => getSettings().hideShorts ?? true);
   const [filterText, setFilterText] = useState('');
@@ -51,50 +24,42 @@ export default function VideoList({ channel, onBack }) {
   const [totalVideos, setTotalVideos] = useState(0);
   const [pageSize, setPageSize] = useState(100);
   const [mode, setMode] = useState('list');
+  const [showDescription, setShowDescription] = useState(false);
+  const [description, setDescription] = useState(null);
+  const [loadingDescription, setLoadingDescription] = useState(false);
 
-  // Cache channel IDs to avoid re-computing
+  const { message, setMessage, error, setError } = useAutoHideMessage();
   const channelIdsRef = useRef(null);
-
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
-  const terminalHeight = stdout?.rows || 24;
-  // Use 95% of available height to prevent flickering
-  const visibleCount = Math.max(5, Math.floor((terminalHeight - 6) * 0.95));
+  const visibleCount = calculateVisibleRows(stdout?.rows || 24);
 
-  // Filter videos based on hideShorts and search text
   const filteredVideos = allVideos.filter((v) => {
     if (hideShorts && v.isShort) return false;
     if (filterText) {
       const search = filterText.toLowerCase();
-      return v.title?.toLowerCase().includes(search) ||
-             v.channelName?.toLowerCase().includes(search);
+      return v.title?.toLowerCase().includes(search) || v.channelName?.toLowerCase().includes(search);
     }
     return true;
   });
 
-  // Scrolling viewport
   const visibleVideos = filteredVideos.slice(scrollOffset, scrollOffset + visibleCount);
-
   const totalPages = Math.ceil(totalVideos / pageSize);
 
-  // Initial load: fetch RSS + first page
+  const resetScroll = () => { setSelectedIndex(0); setScrollOffset(0); };
+
   const initialLoad = useCallback(async () => {
     setLoading(true);
     setError(null);
     setWatchedIds(getWatchedIds());
 
     try {
-      const settings = getSettings();
-      const limit = settings.videosPerChannel || 15;
-
       if (channel) {
-        // Single channel view - use existing flow
-        const channelVideos = await getChannelVideos(channel, limit);
+        const channelVideos = await getChannelVideos(channel, getSettings().videosPerChannel || 15);
         setAllVideos(channelVideos);
         setTotalVideos(channelVideos.length);
         setCurrentPage(0);
       } else {
-        // All videos view - fetch RSS once, then paginate from store
         const subscriptions = getSubscriptions();
         if (subscriptions.length === 0) {
           setAllVideos([]);
@@ -115,293 +80,173 @@ export default function VideoList({ channel, onBack }) {
     } finally {
       setLoading(false);
     }
-  }, [channel]);
+  }, [channel, setError]);
 
-  // Page change: just read from store (fast, no network)
   const loadPage = useCallback((page) => {
     if (!channelIdsRef.current || channel) return;
-    
     const result = getVideoPage(channelIdsRef.current, page, 100);
     setAllVideos(result.videos);
     setTotalVideos(result.total);
     setSelectedIndex(0);
   }, [channel]);
 
-  // Initial load on mount
-  useEffect(() => {
-    initialLoad();
-  }, [initialLoad]);
+  useEffect(() => { initialLoad(); }, [initialLoad]);
 
-  // Handle page changes (fast)
   useEffect(() => {
-    if (!loading && !channel && channelIdsRef.current && currentPage > 0) {
-      loadPage(currentPage);
-    }
+    if (!loading && !channel && channelIdsRef.current && currentPage > 0) loadPage(currentPage);
   }, [currentPage, loading, channel, loadPage]);
 
-  // Clear messages after 3 seconds
-  useEffect(() => {
-    if (message || error) {
-      const timer = setTimeout(() => {
-        setMessage(null);
-        setError(null);
-      }, 3000);
-      return () => clearTimeout(timer);
+  const handlePlay = async () => {
+    if (filteredVideos.length === 0) return;
+    const video = filteredVideos[selectedIndex];
+    if (!video?.url) { setError('No video selected'); return; }
+
+    setPlaying(true);
+    setMessage(`Opening: ${video.title}`);
+    const result = await playVideo(video.url, video.id);
+    setWatchedIds(getWatchedIds());
+    setMessage(result.success ? `Playing in ${result.player}` : null);
+    if (!result.success) setError(`Failed to play: ${result.error}`);
+    setPlaying(false);
+  };
+
+  const fetchDescription = async () => {
+    if (filteredVideos.length === 0) return;
+    const video = filteredVideos[selectedIndex];
+    setLoadingDescription(true);
+    setShowDescription(true);
+    setDescription(null);
+
+    try {
+      setDescription(await getVideoDescription(video.id));
+    } catch (err) {
+      setDescription({ title: video.title, description: `Error: ${err.message}`, channelName: video.channelName });
+    } finally {
+      setLoadingDescription(false);
     }
-  }, [message, error]);
+  };
+
+  const handleToggleShorts = () => {
+    const newValue = !hideShorts;
+    setHideShorts(newValue);
+    updateSettings({ hideShorts: newValue });
+    resetScroll();
+    setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
+  };
+
+  const handleToggleWatched = () => {
+    if (filteredVideos.length === 0) return;
+    const video = filteredVideos[selectedIndex];
+    const nowWatched = toggleWatched(video.id);
+    setWatchedIds(getWatchedIds());
+    setMessage(nowWatched ? 'Marked as watched' : 'Marked as unwatched');
+  };
 
   useInput((input, key) => {
     if (playing) return;
-    
-    // Allow navigation during background loading
-    const blockingLoad = loading && mode !== 'list';
-    if (blockingLoad) return;
+    if (loading && mode !== 'list') return;
 
-    // Filter mode input handling
     if (isFiltering) {
-      if (key.escape) {
-        setIsFiltering(false);
-        setFilterText('');
-        setSelectedIndex(0);
-        setScrollOffset(0);
-      } else if (key.return) {
-        setIsFiltering(false);
-      } else if (key.backspace || key.delete) {
-        setFilterText((t) => t.slice(0, -1));
-        setSelectedIndex(0);
-        setScrollOffset(0);
-      } else if (input && !key.ctrl && !key.meta) {
-        setFilterText((t) => t + input);
-        setSelectedIndex(0);
-        setScrollOffset(0);
-      }
+      if (key.escape) { setIsFiltering(false); setFilterText(''); resetScroll(); }
+      else if (key.return) setIsFiltering(false);
+      else if (key.backspace || key.delete) { setFilterText((t) => t.slice(0, -1)); resetScroll(); }
+      else if (input && !key.ctrl && !key.meta) { setFilterText((t) => t + input); resetScroll(); }
       return;
     }
-    
-    // Confirm mark all mode
+
     if (mode === 'confirm-mark-all') {
-      if (input === 'n' || input === 'N' || key.escape) {
-        setMode('list');
-      } else if (input === 'y' || input === 'Y' || key.return) {
-        // Mark all videos in current view as watched
-        const videoIds = allVideos.map((v) => v.id);
-        markChannelAllWatched(videoIds);
+      if (input === 'n' || input === 'N' || key.escape) setMode('list');
+      else if (input === 'y' || input === 'Y' || key.return) {
+        markChannelAllWatched(allVideos.map((v) => v.id));
         setWatchedIds(getWatchedIds());
-        setMessage(`Marked ${videoIds.length} videos as watched`);
+        setMessage(`Marked ${allVideos.length} videos as watched`);
         setMode('list');
       }
       return;
     }
 
     if (key.escape || input === 'b') {
-      if (filterText) {
-        setFilterText('');
-        setSelectedIndex(0);
-        setScrollOffset(0);
-      } else {
-        onBack();
-      }
-    } else if (input === 'q') {
-      process.exit(0);
-    } else if (input === 'r' && !loading) {
-      setScrollOffset(0);
-      initialLoad();
-    } else if (input === 's') {
-      const newValue = !hideShorts;
-      setHideShorts(newValue);
-      updateSettings({ hideShorts: newValue });
-      setSelectedIndex(0);
-      setScrollOffset(0);
-      setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
-    } else if (input === '/') {
-      setIsFiltering(true);
-    } else if (input === 'n' && !channel && currentPage < totalPages - 1) {
-      // All videos view: load next page from store
-      setCurrentPage((p) => p + 1);
-      setSelectedIndex(0);
-      setScrollOffset(0);
-    } else if (input === 'p' && !channel && currentPage > 0) {
-      // All videos view: load previous page from store
-      setCurrentPage((p) => p - 1);
-      setSelectedIndex(0);
-      setScrollOffset(0);
-    } else if (input === 'w' && filteredVideos.length > 0) {
-      // Toggle watched status
-      const video = filteredVideos[selectedIndex];
-      const nowWatched = toggleWatched(video.id);
-      setWatchedIds(getWatchedIds());
-      setMessage(nowWatched ? 'Marked as watched' : 'Marked as unwatched');
-    } else if (input === 'm' && channel && filteredVideos.length > 0) {
-      // Mark all as watched (only in channel view)
-      setMode('confirm-mark-all');
+      if (filterText) { setFilterText(''); resetScroll(); }
+      else onBack();
+    } else if (input === 'q') process.exit(0);
+    else if (input === 'r' && !loading) { setScrollOffset(0); initialLoad(); }
+    else if (input === 's') handleToggleShorts();
+    else if (input === '/') setIsFiltering(true);
+    else if (input === 'n' && !channel && currentPage < totalPages - 1) { setCurrentPage((p) => p + 1); resetScroll(); }
+    else if (input === 'p' && !channel && currentPage > 0) { setCurrentPage((p) => p - 1); resetScroll(); }
+    else if (input === 'w') handleToggleWatched();
+    else if (input === 'm' && channel && filteredVideos.length > 0) setMode('confirm-mark-all');
+    else if (input === 'i' && filteredVideos.length > 0) {
+      if (showDescription) { setShowDescription(false); setDescription(null); }
+      else fetchDescription();
     } else if (key.upArrow || input === 'k') {
       setSelectedIndex((i) => {
         const newIndex = Math.max(0, i - 1);
-        // Scroll up if needed
-        if (newIndex < scrollOffset) {
-          setScrollOffset(newIndex);
-        }
+        if (newIndex < scrollOffset) setScrollOffset(newIndex);
         return newIndex;
       });
     } else if (key.downArrow || input === 'j') {
       setSelectedIndex((i) => {
         const newIndex = Math.min(filteredVideos.length - 1, i + 1);
-        // Scroll down if needed
-        if (newIndex >= scrollOffset + visibleCount) {
-          setScrollOffset(newIndex - visibleCount + 1);
-        }
+        if (newIndex >= scrollOffset + visibleCount) setScrollOffset(newIndex - visibleCount + 1);
         return newIndex;
       });
-    } else if (key.return && !loading) {
-      handlePlay();
-    }
+    } else if (key.return && !loading) handlePlay();
   });
 
-  const handlePlay = async () => {
-    if (filteredVideos.length === 0) return;
+  const handleRowSelect = useCallback((vi) => setSelectedIndex(scrollOffset + vi), [scrollOffset]);
 
-    const video = filteredVideos[selectedIndex];
-    if (!video || !video.url) {
-      setError('No video selected');
-      return;
-    }
-    setPlaying(true);
-    setMessage(`Opening: ${video.title}`);
-
-    const result = await playVideo(video.url, video.id);
-
-    // Update watched state immediately after playing
-    setWatchedIds(getWatchedIds());
-
-    if (result.success) {
-      setMessage(`Playing in ${result.player}`);
-    } else {
-      setError(`Failed to play: ${result.error}`);
-    }
-
-    setPlaying(false);
-  };
-
-  // Mouse handlers - convert visible index to actual index
-  const handleRowSelect = useCallback((visibleIndex) => {
-    setSelectedIndex(scrollOffset + visibleIndex);
-  }, [scrollOffset]);
-
-  const handleRowActivate = useCallback(async (visibleIndex) => {
+  const handleRowActivate = useCallback(async (vi) => {
     if (filteredVideos.length === 0 || playing || loading) return;
-
-    const actualIndex = scrollOffset + visibleIndex;
+    const actualIndex = scrollOffset + vi;
     const video = filteredVideos[actualIndex];
-    if (!video || !video.url) {
-      return;
-    }
+    if (!video?.url) return;
+
     setSelectedIndex(actualIndex);
     setPlaying(true);
     setMessage(`Opening: ${video.title}`);
-
     const result = await playVideo(video.url, video.id);
     setWatchedIds(getWatchedIds());
-
-    if (result.success) {
-      setMessage(`Playing in ${result.player}`);
-    } else {
-      setError(`Failed to play: ${result.error}`);
-    }
-
+    setMessage(result.success ? `Playing in ${result.player}` : null);
+    if (!result.success) setError(`Failed to play: ${result.error}`);
     setPlaying(false);
-  }, [filteredVideos, scrollOffset, playing, loading]);
+  }, [filteredVideos, scrollOffset, playing, loading, setMessage, setError]);
 
-  // Truncate or pad text to exact width
-  const truncate = (text, maxLen) => {
-    if (!text) return '';
-    return text.length > maxLen ? text.slice(0, maxLen - 1) + '…' : text;
-  };
-  
-  const pad = (text, width) => {
-    if (!text) return ' '.repeat(width);
-    if (text.length >= width) return text.slice(0, width);
-    return text + ' '.repeat(width - text.length);
-  };
-
-  // Fixed column widths for table layout
   const showChannel = !channel;
   const channelColWidth = showChannel ? 32 : 0;
   const dateColWidth = 8;
   const availableWidth = Math.max(terminalWidth - 5, 80);
-  // Layout: pointer(2) + channel + title + date
   const titleColWidth = availableWidth - 2 - channelColWidth - dateColWidth - 2;
 
   const title = channel ? channel.name : 'All Videos';
   const filterInfo = filterText ? ` (filter: "${filterText}")` : '';
-  // Show page info only for all videos view (store pagination)
   const pageInfo = !channel && totalPages > 1 ? ` [${currentPage + 1}/${totalPages}]` : '';
   const subtitle = `${filteredVideos.length} video${filteredVideos.length !== 1 ? 's' : ''}${filterInfo}${pageInfo}`;
 
-  const handleToggleShorts = () => {
-    const newValue = !hideShorts;
-    setHideShorts(newValue);
-    updateSettings({ hideShorts: newValue });
-    setSelectedIndex(0);
-    setScrollOffset(0);
-    setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
-  };
-
   return (
     <Box flexDirection="column">
-      <Header
-        title={title}
-        subtitle={subtitle}
-        loading={loading}
-        loadingMessage={loading ? 'Refreshing...' : ''}
-        hideShorts={hideShorts}
-        onToggleShorts={handleToggleShorts}
-      />
+      <Header title={title} subtitle={subtitle} loading={loading} loadingMessage={loading ? 'Refreshing...' : ''} hideShorts={hideShorts} />
 
-      {mode === 'confirm-mark-all' && (
-        <Box>
-          <Text>Mark all {allVideos.length} videos as watched? (y/n)</Text>
-        </Box>
-      )}
+      {mode === 'confirm-mark-all' && <Text>Mark all {allVideos.length} videos as watched? (y/n)</Text>}
+      {error && !filteredVideos.length && <Text color="red">{error}</Text>}
+      {!loading && filteredVideos.length === 0 && !error && <Text color="gray">No videos found.</Text>}
 
-      {error && !filteredVideos.length && (
-        <Box>
-          <Text color="red">{error}</Text>
-        </Box>
-      )}
+      {showDescription && <DescriptionPanel loading={loadingDescription} description={description} />}
 
-      {!loading && filteredVideos.length === 0 && !error && (
-        <Text color="gray">No videos found.</Text>
-      )}
-
-      {filteredVideos.length > 0 && (
+      {filteredVideos.length > 0 && !showDescription && (
         <Box flexDirection="column">
           {visibleVideos.map((video, index) => {
             const actualIndex = scrollOffset + index;
             const isSelected = actualIndex === selectedIndex;
             const isWatched = watchedIds.has(video.id);
-
-            // Format columns with fixed widths
             const pointer = isSelected ? '>' : ' ';
             const channelText = showChannel ? pad(truncate(video.channelName, channelColWidth - 1), channelColWidth) : '';
             const titleText = pad(truncate(video.title, titleColWidth - 1), titleColWidth);
             const dateText = '  ' + pad(video.relativeDate || '', dateColWidth - 2);
 
             return (
-              <ClickableRow
-                key={video.id}
-                index={index}
-                onSelect={handleRowSelect}
-                onActivate={handleRowActivate}
-              >
-                <VideoRow
-                  pointer={pointer}
-                  channelText={channelText}
-                  titleText={titleText}
-                  dateText={dateText}
-                  isSelected={isSelected}
-                  isWatched={isWatched}
-                  showChannel={showChannel}
-                />
+              <ClickableRow key={video.id} index={index} onSelect={handleRowSelect} onActivate={handleRowActivate}>
+                <VideoRow pointer={pointer} channelText={channelText} titleText={titleText} metaText={dateText} isSelected={isSelected} isWatched={isWatched} showChannel={showChannel} />
               </ClickableRow>
             );
           })}
@@ -409,75 +254,29 @@ export default function VideoList({ channel, onBack }) {
       )}
 
       <Box flexDirection="column">
-        {message && (
-          <Box>
-            <Text color="green">{message}</Text>
-          </Box>
-        )}
-
-        {error && filteredVideos.length > 0 && (
-          <Box>
-            <Text color="red">{error}</Text>
-          </Box>
-        )}
-
+        {message && <Text color="green">{message}</Text>}
+        {error && filteredVideos.length > 0 && <Text color="red">{error}</Text>}
         <StatusBar>
           {isFiltering ? (
-            <Text>
-              <Text color="yellow">Filter: </Text>
-              <Text>{filterText}</Text>
-              <Text color="gray">_</Text>
-              <Text color="gray">  (Enter to confirm, Esc to cancel)</Text>
-            </Text>
+            <Text><Text color="yellow">Filter: </Text><Text>{filterText}</Text><Text color="gray">_  (Enter to confirm, Esc to cancel)</Text></Text>
+          ) : showDescription ? (
+            <KeyHint keyName="i" description=" close info" onClick={() => { setShowDescription(false); setDescription(null); }} />
           ) : (
             <>
               <KeyHint keyName="Enter" description=" play" onClick={handlePlay} />
-              <KeyHint keyName="w" description="atched" onClick={() => {
-                if (filteredVideos.length > 0) {
-                  const video = filteredVideos[selectedIndex];
-                  const nowWatched = toggleWatched(video.id);
-                  setWatchedIds(getWatchedIds());
-                  setMessage(nowWatched ? 'Marked as watched' : 'Marked as unwatched');
-                }
-              }} />
+              <KeyHint keyName="i" description="nfo" onClick={fetchDescription} />
+              <KeyHint keyName="w" description="atched" onClick={handleToggleWatched} />
               {channel && <KeyHint keyName="m" description="ark all" onClick={() => setMode('confirm-mark-all')} />}
               <KeyHint keyName="/" description=" filter" onClick={() => setIsFiltering(true)} />
-              <KeyHint keyName="s" description={hideShorts ? " +shorts" : " -shorts"} onClick={() => {
-                const newValue = !hideShorts;
-                setHideShorts(newValue);
-                updateSettings({ hideShorts: newValue });
-                setSelectedIndex(0);
-                setScrollOffset(0);
-                setMessage(newValue ? 'Hiding Shorts' : 'Showing all videos');
-              }} />
+              <KeyHint keyName="s" description={hideShorts ? " +shorts" : " -shorts"} onClick={handleToggleShorts} />
               {!channel && totalPages > 1 && (
                 <>
-                  <KeyHint keyName="n" description="ext" onClick={() => {
-                    if (currentPage < totalPages - 1) {
-                      setCurrentPage((p) => p + 1);
-                      setSelectedIndex(0);
-                      setScrollOffset(0);
-                    }
-                  }} />
-                  <KeyHint keyName="p" description="rev" onClick={() => {
-                    if (currentPage > 0) {
-                      setCurrentPage((p) => p - 1);
-                      setSelectedIndex(0);
-                      setScrollOffset(0);
-                    }
-                  }} />
+                  <KeyHint keyName="n" description="ext" onClick={() => { if (currentPage < totalPages - 1) { setCurrentPage((p) => p + 1); resetScroll(); } }} />
+                  <KeyHint keyName="p" description="rev" onClick={() => { if (currentPage > 0) { setCurrentPage((p) => p - 1); resetScroll(); } }} />
                 </>
               )}
               <KeyHint keyName="r" description="efresh" onClick={() => { if (!loading) { setScrollOffset(0); initialLoad(); } }} />
-              <KeyHint keyName="b" description="ack" onClick={() => {
-                if (filterText) {
-                  setFilterText('');
-                  setSelectedIndex(0);
-                  setScrollOffset(0);
-                } else {
-                  onBack();
-                }
-              }} />
+              <KeyHint keyName="b" description="ack" onClick={() => { if (filterText) { setFilterText(''); resetScroll(); } else onBack(); }} />
               <KeyHint keyName="q" description="uit" onClick={() => process.exit(0)} />
             </>
           )}

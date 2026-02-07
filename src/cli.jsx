@@ -4,7 +4,7 @@ import { MouseProvider } from '@ink-tools/ink-mouse';
 import meow from 'meow';
 import readline from 'readline';
 import App from './App.jsx';
-import { addSubscription, getSubscriptions } from './lib/config.js';
+import { initConfig, addSubscription, getSubscriptions, closeDb } from './lib/config.js';
 import { getChannelInfo, primeChannel } from './lib/ytdlp.js';
 
 const cli = meow(`
@@ -27,9 +27,9 @@ const cli = meow(`
     $ youtube-cli
     $ youtube-cli --add https://youtube.com/@Fireship
     $ youtube-cli -c 1
-    $ youtube-cli --prime            # Prime all channels
-    $ youtube-cli --prime 3          # Prime channel #3
-    $ youtube-cli --prime "fireship" # Prime by name
+    $ youtube-cli --prime
+    $ youtube-cli --prime 3
+    $ youtube-cli --prime "fireship"
 
   Navigation
     j/k or arrows   Move up/down
@@ -45,195 +45,163 @@ const cli = meow(`
 `, {
   importMeta: import.meta,
   flags: {
-    add: {
-      type: 'string',
-      shortFlag: 'a',
-    },
-    list: {
-      type: 'boolean',
-      shortFlag: 'l',
-    },
-    channel: {
-      type: 'number',
-      shortFlag: 'c',
-    },
-    prime: {
-      type: 'string',
-      shortFlag: 'p',
-    },
+    add: { type: 'string', shortFlag: 'a' },
+    list: { type: 'boolean', shortFlag: 'l' },
+    channel: { type: 'number', shortFlag: 'c' },
+    prime: { type: 'string', shortFlag: 'p' },
   },
 });
 
+function clearLine() {
+  process.stdout.clearLine(0);
+  process.stdout.cursorTo(0);
+}
+
+function writeProgress(name, done, total) {
+  clearLine();
+  process.stdout.write(`${name}: ${done}/${total} videos`);
+}
+
+async function primeWithProgress(channel) {
+  process.stdout.write(`${channel.name}: fetching...`);
+  try {
+    const result = await primeChannel(channel, (done, total) => writeProgress(channel.name, done, total));
+    clearLine();
+    const suffix = result.partial ? ' (partial - some timed out)' : '';
+    console.log(`${channel.name}: added ${result.added} videos${suffix}`);
+    return true;
+  } catch (err) {
+    clearLine();
+    console.log(`${channel.name}: failed - ${err.message}`);
+    return false;
+  }
+}
+
+async function promptYesNo(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise((resolve) => rl.question(question, resolve));
+  rl.close();
+  return answer.toLowerCase() !== 'n';
+}
+
+function findChannelsByQuery(subs, query) {
+  const index = parseInt(query, 10);
+  if (!isNaN(index) && index >= 1 && index <= subs.length) {
+    return [subs[index - 1]];
+  }
+  const search = query.toLowerCase();
+  return subs.filter((s) => s.name.toLowerCase().includes(search));
+}
+
+async function handleAdd(url) {
+  console.log(`Fetching channel info for: ${url}`);
+  try {
+    const channelInfo = await getChannelInfo(url);
+    const result = addSubscription(channelInfo);
+
+    if (!result.success) {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+
+    console.log(`Added: ${channelInfo.name}`);
+    if (await promptYesNo('Prime historical videos? (Y/n) ')) {
+      console.log('');
+      await primeWithProgress(channelInfo);
+    }
+  } catch (err) {
+    console.error(`Failed to add channel: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+function handleList() {
+  const subs = getSubscriptions();
+  if (subs.length === 0) {
+    console.log('No subscriptions yet. Use --add <url> to add one.');
+    return;
+  }
+  console.log('Subscriptions:');
+  subs.forEach((sub, i) => {
+    console.log(`  ${i + 1}. ${sub.name}`);
+    console.log(`     ${sub.url}`);
+  });
+}
+
+async function handlePrime(query) {
+  const subs = getSubscriptions();
+  if (subs.length === 0) {
+    console.log('No subscriptions yet. Use --add <url> to add one.');
+    return;
+  }
+
+  let channelsToPrime = subs;
+  if (query !== '') {
+    const matches = findChannelsByQuery(subs, query);
+    if (matches.length === 0) {
+      console.error(`No channel found matching "${query}"`);
+      process.exit(1);
+    }
+    if (matches.length > 1) {
+      console.log(`Multiple channels match "${query}":`);
+      matches.forEach((m, i) => console.log(`  ${i + 1}. ${m.name}`));
+      console.log('\nBe more specific or use the index number.');
+      process.exit(1);
+    }
+    channelsToPrime = matches;
+  }
+
+  console.log(`Priming ${channelsToPrime.length} channel(s) with full history...`);
+  console.log('This may take a while.\n');
+
+  for (const channel of channelsToPrime) {
+    await primeWithProgress(channel);
+  }
+  console.log('\nDone!');
+}
+
+function handleChannel(index) {
+  const subs = getSubscriptions();
+  const idx = index - 1;
+  if (idx < 0 || idx >= subs.length) {
+    console.error(`Invalid channel index. You have ${subs.length} subscription(s).`);
+    process.exit(1);
+  }
+  return subs[idx];
+}
+
+function setupAltScreen() {
+  process.stdout.write('\x1B[?1049h\x1B[H');
+  const restore = () => process.stdout.write('\x1B[?1049l');
+  process.on('exit', restore);
+  process.on('SIGINT', () => { restore(); process.exit(0); });
+  process.on('SIGTERM', () => { restore(); process.exit(0); });
+}
+
 async function main() {
-  // Handle --add flag
+  await initConfig();
+
   if (cli.flags.add) {
-    console.log(`Fetching channel info for: ${cli.flags.add}`);
-    try {
-      const channelInfo = await getChannelInfo(cli.flags.add);
-      const result = addSubscription(channelInfo);
-      
-      if (result.success) {
-        console.log(`Added: ${channelInfo.name}`);
-        
-        // Prompt to prime
-        const rl = readline.createInterface({
-          input: process.stdin,
-          output: process.stdout,
-        });
-        
-        const answer = await new Promise((resolve) => {
-          rl.question('Prime historical videos? (Y/n) ', resolve);
-        });
-        rl.close();
-        
-        if (answer.toLowerCase() !== 'n') {
-          console.log('');
-          process.stdout.write(`${channelInfo.name}: fetching...`);
-          try {
-            const primeResult = await primeChannel(channelInfo, (done, total) => {
-              process.stdout.clearLine(0);
-              process.stdout.cursorTo(0);
-              process.stdout.write(`${channelInfo.name}: ${done}/${total} videos`);
-            });
-            process.stdout.clearLine(0);
-            process.stdout.cursorTo(0);
-            if (primeResult.partial) {
-              console.log(`${channelInfo.name}: added ${primeResult.added} videos (partial - some timed out)`);
-            } else {
-              console.log(`${channelInfo.name}: added ${primeResult.added} videos`);
-            }
-          } catch (err) {
-            process.stdout.clearLine(0);
-            process.stdout.cursorTo(0);
-            console.log(`${channelInfo.name}: failed - ${err.message}`);
-          }
-        }
-      } else {
-        console.error(`Error: ${result.error}`);
-        process.exit(1);
-      }
-    } catch (err) {
-      console.error(`Failed to add channel: ${err.message}`);
-      process.exit(1);
-    }
+    await handleAdd(cli.flags.add);
+    closeDb();
     return;
   }
 
-  // Handle --list flag
   if (cli.flags.list) {
-    const subs = getSubscriptions();
-    if (subs.length === 0) {
-      console.log('No subscriptions yet. Use --add <url> to add one.');
-    } else {
-      console.log('Subscriptions:');
-      subs.forEach((sub, i) => {
-        console.log(`  ${i + 1}. ${sub.name}`);
-        console.log(`     ${sub.url}`);
-      });
-    }
+    handleList();
+    closeDb();
     return;
   }
 
-  // Handle --prime flag
   if (cli.flags.prime !== undefined) {
-    const subs = getSubscriptions();
-    if (subs.length === 0) {
-      console.log('No subscriptions yet. Use --add <url> to add one.');
-      return;
-    }
-
-    let channelsToPrime = subs;
-    if (cli.flags.prime !== '') {
-      const query = cli.flags.prime;
-      const index = parseInt(query, 10);
-      
-      // Check if it's a number (index)
-      if (!isNaN(index) && index >= 1 && index <= subs.length) {
-        channelsToPrime = [subs[index - 1]];
-      } else {
-        // Search by name (case-insensitive)
-        const search = query.toLowerCase();
-        const matches = subs.filter((s) => 
-          s.name.toLowerCase().includes(search)
-        );
-        
-        if (matches.length === 0) {
-          console.error(`No channel found matching "${query}"`);
-          process.exit(1);
-        } else if (matches.length > 1) {
-          console.log(`Multiple channels match "${query}":`);
-          for (const [i, m] of matches.entries()) {
-            console.log(`  ${i + 1}. ${m.name}`);
-          }
-          console.log('\nBe more specific or use the index number.');
-          process.exit(1);
-        }
-        channelsToPrime = matches;
-      }
-    }
-
-    console.log(`Priming ${channelsToPrime.length} channel(s) with full history...`);
-    console.log('This may take a while.\n');
-
-    for (const channel of channelsToPrime) {
-      process.stdout.write(`${channel.name}: fetching...`);
-      try {
-        const result = await primeChannel(channel, (done, total) => {
-          process.stdout.clearLine(0);
-          process.stdout.cursorTo(0);
-          process.stdout.write(`${channel.name}: ${done}/${total} videos`);
-        });
-        process.stdout.clearLine(0);
-        process.stdout.cursorTo(0);
-        if (result.partial) {
-          console.log(`${channel.name}: added ${result.added} videos (partial - some timed out)`);
-        } else {
-          console.log(`${channel.name}: added ${result.added} videos`);
-        }
-      } catch (err) {
-        process.stdout.clearLine(0);
-        process.stdout.cursorTo(0);
-        console.log(`${channel.name}: failed - ${err.message}`);
-      }
-    }
-    console.log('\nDone!');
+    await handlePrime(cli.flags.prime);
+    closeDb();
     return;
   }
 
-  // Handle --channel flag
-  let initialChannel = null;
-  if (cli.flags.channel) {
-    const subs = getSubscriptions();
-    const index = cli.flags.channel - 1;
-    if (index >= 0 && index < subs.length) {
-      initialChannel = subs[index];
-    } else {
-      console.error(`Invalid channel index. You have ${subs.length} subscription(s).`);
-      process.exit(1);
-    }
-  }
+  const initialChannel = cli.flags.channel ? handleChannel(cli.flags.channel) : null;
 
-  // Launch the TUI with mouse support
-  // Use alternate screen buffer for accurate mouse positioning
-  // (mouse coords are viewport-relative, so we need a clean slate)
-  process.stdout.write('\x1B[?1049h'); // Switch to alternate screen buffer
-  process.stdout.write('\x1B[H');      // Move cursor to top-left
-
-  // Ensure we restore the screen buffer on exit
-  const restoreScreen = () => {
-    process.stdout.write('\x1B[?1049l');
-  };
-  process.on('exit', restoreScreen);
-  process.on('SIGINT', () => {
-    restoreScreen();
-    process.exit(0);
-  });
-  process.on('SIGTERM', () => {
-    restoreScreen();
-    process.exit(0);
-  });
-
-  // cacheInvalidationMs=0 ensures accurate hit detection with dynamic content
+  setupAltScreen();
   render(
     React.createElement(MouseProvider, { cacheInvalidationMs: 0 },
       React.createElement(App, { initialChannel })
