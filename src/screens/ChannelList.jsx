@@ -220,8 +220,14 @@ export default function ChannelList({
       return;
     }
 
-    if (mode === 'add' && key.escape) { setMode('list'); setAddUrl(''); return; }
-    if (mode === 'global-search' && key.escape) { setMode('list'); setSearchQuery(''); return; }
+    if (mode === 'add') {
+      if (key.escape) { setMode('list'); setAddUrl(''); }
+      return;
+    }
+    if (mode === 'global-search') {
+      if (key.escape) { setMode('list'); setSearchQuery(''); }
+      return;
+    }
 
     if (mode === 'confirm-delete') {
       if (input === 'y' || input === 'Y') handleDelete();

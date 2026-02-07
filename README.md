@@ -1,8 +1,9 @@
 # A terminal UI for watching YouTube
+
 - Add and manage subscriptions
 - Search and watch any video
-- Vibe coded
-- Could break at any time
+- Fast parallel priming with retry logic
+- SQLite storage for performance
 
 ## Requirements
 
@@ -32,7 +33,11 @@ youtube-cli --list       # list subscriptions
 
 ## Storage
 
-`~/.config/youtube-cli/`
-- `subscriptions.json` - channels + settings
-- `videos.json` - video cache
-- `watched.json` - watched video IDs
+Data stored in `~/.config/youtube-cli/youtube-cli.db` (SQLite via sql.js)
+
+## Development
+
+```bash
+pnpm test     # run tests
+pnpm build    # build dist/cli.js
+```
