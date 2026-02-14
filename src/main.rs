@@ -420,6 +420,18 @@ async fn handle_key_event(
             }
             return Ok(false);
         }
+        Mode::ConfirmChannelWatched => {
+            match key {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    app.mark_channel_watched();
+                    app.mode = Mode::List;
+                }
+                _ => {
+                    app.mode = Mode::List;
+                }
+            }
+            return Ok(false);
+        }
         _ => {}
     }
 
@@ -437,7 +449,7 @@ async fn handle_channel_keys(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let filtered_len = app.filtered_subscriptions().len();
-    let visible_count = terminal.size()?.height.saturating_sub(6) as usize;
+    let visible_count = terminal.size()?.height.saturating_sub(7) as usize;
 
     match key {
         KeyCode::Char('q') => return Ok(true),
@@ -495,7 +507,14 @@ async fn handle_channel_keys(
         }
         KeyCode::Char('w') => {
             if filtered_len > 0 {
-                app.mark_channel_watched();
+                let filtered = app.filtered_subscriptions();
+                let is_all_watched = filtered
+                    .get(app.channel_selected)
+                    .map(|s| app.fully_watched.contains(&s.id))
+                    .unwrap_or(true);
+                if !is_all_watched {
+                    app.mode = Mode::ConfirmChannelWatched;
+                }
             }
         }
         KeyCode::Char('p') => {
@@ -517,7 +536,7 @@ async fn handle_video_keys(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let filtered_len = app.filtered_videos().len();
-    let visible_count = terminal.size()?.height.saturating_sub(6) as usize;
+    let visible_count = terminal.size()?.height.saturating_sub(7) as usize;
 
     match key {
         KeyCode::Char('q') => return Ok(true),
@@ -592,7 +611,7 @@ async fn handle_search_keys(
     _terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let results_len = app.filtered_videos().len();
-    let visible_count = _terminal.size()?.height.saturating_sub(6) as usize;
+    let visible_count = _terminal.size()?.height.saturating_sub(7) as usize;
 
     match key {
         KeyCode::Char('q') => return Ok(true),
@@ -1110,13 +1129,13 @@ async fn load_videos_for_screen(app: &mut App) {
         app.db.store_videos(&fresh);
 
         let stored = app.db.get_stored_videos(&channel.id);
-        // Merge: stored + fresh, deduplicated
+        // Merge: stored + fresh, deduplicated (prefer stored to preserve DB metadata)
         let mut video_map: std::collections::HashMap<String, db::Video> = std::collections::HashMap::new();
         for v in stored {
             video_map.insert(v.id.clone(), v);
         }
         for v in fresh {
-            video_map.insert(v.id.clone(), v);
+            video_map.entry(v.id.clone()).or_insert(v);
         }
         let mut videos: Vec<db::Video> = video_map.into_values().collect();
         videos.sort_by(|a, b| {

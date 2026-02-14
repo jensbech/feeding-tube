@@ -139,3 +139,85 @@ pub async fn play_video(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── player_args tests ────────────────────────────────────
+
+    #[test]
+    fn test_player_args_mpv() {
+        let args = player_args("mpv");
+        assert!(args.contains(&"--force-window=immediate"));
+        assert!(args.contains(&"--keep-open=no"));
+    }
+
+    #[test]
+    fn test_player_args_iina() {
+        let args = player_args("iina");
+        assert!(args.contains(&"--no-stdin"));
+    }
+
+    #[test]
+    fn test_player_args_vlc() {
+        let args = player_args("vlc");
+        assert!(args.contains(&"--no-video-title-show"));
+    }
+
+    #[test]
+    fn test_player_args_unknown() {
+        let args = player_args("unknown_player");
+        assert!(args.is_empty());
+    }
+
+    // ── extract_video_id tests ───────────────────────────────
+
+    #[test]
+    fn test_extract_video_id_watch_url() {
+        assert_eq!(
+            extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_video_id_short_url() {
+        assert_eq!(
+            extract_video_id("https://youtu.be/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_video_id_embed_url() {
+        assert_eq!(
+            extract_video_id("https://youtube.com/embed/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_video_id_with_params() {
+        assert_eq!(
+            extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_video_id_invalid() {
+        assert_eq!(extract_video_id("https://example.com"), None);
+        assert_eq!(extract_video_id("not a url"), None);
+        assert_eq!(extract_video_id(""), None);
+    }
+
+    // ── SUPPORTED_PLAYERS ────────────────────────────────────
+
+    #[test]
+    fn test_supported_players_list() {
+        assert!(SUPPORTED_PLAYERS.contains(&"mpv"));
+        assert!(SUPPORTED_PLAYERS.contains(&"iina"));
+        assert!(SUPPORTED_PLAYERS.contains(&"vlc"));
+    }
+}

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use crate::db::{Database, Settings, Subscription, Video};
+use crate::db::{ChannelStats, Database, Settings, Subscription, Video};
 use crate::ytdlp::{ChannelInfo, VideoDescription};
 
 // ── Screens & Modes ────────────────────────────────────────
@@ -24,6 +24,7 @@ pub enum Mode {
     ConfirmPrimeAll,
     ConfirmMarkAll,
     ConfirmMarkAllVideos,
+    ConfirmChannelWatched,
     ConfirmAddChannel,
     NewSearch,
     Description,
@@ -51,6 +52,7 @@ pub struct App {
     pub channel_selected: usize,
     pub channel_scroll: usize,
     pub new_counts: HashMap<String, usize>,
+    pub channel_stats: HashMap<String, ChannelStats>,
     pub fully_watched: HashSet<String>,
     pub saved_channel_index: usize,
 
@@ -120,6 +122,7 @@ impl App {
             channel_selected: 0,
             channel_scroll: 0,
             new_counts: HashMap::new(),
+            channel_stats: HashMap::new(),
             fully_watched: HashSet::new(),
             saved_channel_index: 0,
             current_channel: None,
@@ -168,6 +171,7 @@ impl App {
 
     pub fn refresh_counts(&mut self) {
         self.new_counts = self.db.get_new_video_counts(self.hide_shorts);
+        self.channel_stats = self.db.get_channel_stats(self.hide_shorts);
         self.fully_watched = self.db.get_fully_watched_channels(self.hide_shorts);
     }
 
@@ -336,6 +340,10 @@ impl App {
         if self.channel_selected >= subs_len && subs_len > 0 {
             self.channel_selected = subs_len - 1;
         }
+
+        // Refresh so watched/new state reflects changes made while viewing
+        self.refresh_counts();
+        self.refresh_watched();
     }
 
     // ── Input Handling ─────────────────────────────────────
@@ -415,6 +423,7 @@ impl App {
                 videos.iter().map(|v| v.id.clone()).collect()
             };
             let count = self.db.mark_channel_all_watched(&video_ids);
+            self.db.update_channel_last_viewed(&channel_id);
             self.refresh_counts();
             self.refresh_watched();
             let name = self.filtered_subscriptions()
@@ -448,5 +457,448 @@ impl App {
             return 1;
         }
         (self.total_videos + self.page_size - 1) / self.page_size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{Database, Video};
+    use chrono::Utc;
+
+    fn test_app() -> App {
+        let db = Database::open_in_memory().unwrap();
+        App::new(db)
+    }
+
+    fn make_video(id: &str, channel_id: &str, is_short: bool) -> Video {
+        Video {
+            id: id.to_string(),
+            title: format!("Video {}", id),
+            url: format!("https://youtube.com/watch?v={}", id),
+            is_short,
+            channel_name: Some("TestChannel".to_string()),
+            channel_id: Some(channel_id.to_string()),
+            published_date: Some(Utc::now()),
+            stored_at: None,
+            relative_date: "1h ago".to_string(),
+            duration: None,
+            duration_string: None,
+            view_count: None,
+        }
+    }
+
+    // ── Initial state tests ──────────────────────────────────
+
+    #[test]
+    fn test_new_app_initial_state() {
+        let app = test_app();
+        assert_eq!(app.screen, Screen::Channels);
+        assert_eq!(app.mode, Mode::List);
+        assert_eq!(app.channel_selected, 0);
+        assert_eq!(app.video_selected, 0);
+        assert!(!app.loading);
+        assert!(app.filter_text.is_empty());
+        assert!(app.input_text.is_empty());
+        assert!(!app.show_description);
+        assert!(!app.playing);
+    }
+
+    #[test]
+    fn test_with_initial_channel() {
+        let db = Database::open_in_memory().unwrap();
+        let ch = crate::db::Subscription {
+            id: "ch1".to_string(),
+            name: "Test".to_string(),
+            url: "https://youtube.com/channel/ch1".to_string(),
+            added_at: None,
+        };
+        let app = App::with_initial_channel(db, ch);
+        assert_eq!(app.screen, Screen::Videos);
+        assert!(app.current_channel.is_some());
+    }
+
+    // ── Scroll tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_move_down_basic() {
+        let mut app = test_app();
+        app.screen = Screen::Channels;
+        app.move_down(10, 5);
+        assert_eq!(app.channel_selected, 1);
+        assert_eq!(app.channel_scroll, 0);
+    }
+
+    #[test]
+    fn test_move_down_scrolls() {
+        let mut app = test_app();
+        app.screen = Screen::Channels;
+        for _ in 0..7 {
+            app.move_down(10, 5);
+        }
+        assert_eq!(app.channel_selected, 7);
+        assert_eq!(app.channel_scroll, 3); // 7 - 5 + 1
+    }
+
+    #[test]
+    fn test_move_down_stops_at_end() {
+        let mut app = test_app();
+        app.screen = Screen::Channels;
+        for _ in 0..20 {
+            app.move_down(5, 10);
+        }
+        assert_eq!(app.channel_selected, 4); // 5 - 1
+    }
+
+    #[test]
+    fn test_move_up_basic() {
+        let mut app = test_app();
+        app.screen = Screen::Channels;
+        app.channel_selected = 3;
+        app.move_up();
+        assert_eq!(app.channel_selected, 2);
+    }
+
+    #[test]
+    fn test_move_up_stops_at_zero() {
+        let mut app = test_app();
+        app.screen = Screen::Channels;
+        app.move_up();
+        assert_eq!(app.channel_selected, 0);
+    }
+
+    #[test]
+    fn test_move_up_adjusts_scroll() {
+        let mut app = test_app();
+        app.screen = Screen::Channels;
+        app.channel_selected = 3;
+        app.channel_scroll = 3;
+        app.move_up();
+        assert_eq!(app.channel_selected, 2);
+        assert_eq!(app.channel_scroll, 2);
+    }
+
+    #[test]
+    fn test_reset_scroll() {
+        let mut app = test_app();
+        app.screen = Screen::Videos;
+        app.video_selected = 5;
+        app.video_scroll = 3;
+        app.reset_scroll();
+        assert_eq!(app.video_selected, 0);
+        assert_eq!(app.video_scroll, 0);
+    }
+
+    #[test]
+    fn test_move_down_empty_list() {
+        let mut app = test_app();
+        app.screen = Screen::Channels;
+        app.move_down(0, 5);
+        assert_eq!(app.channel_selected, 0);
+    }
+
+    // ── current_selected / current_scroll per screen ─────────
+
+    #[test]
+    fn test_current_selected_per_screen() {
+        let mut app = test_app();
+        app.channel_selected = 1;
+        app.video_selected = 2;
+        app.search_selected = 3;
+
+        app.screen = Screen::Channels;
+        assert_eq!(app.current_selected(), 1);
+        app.screen = Screen::Videos;
+        assert_eq!(app.current_selected(), 2);
+        app.screen = Screen::Search;
+        assert_eq!(app.current_selected(), 3);
+    }
+
+    // ── Input tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_input_insert() {
+        let mut app = test_app();
+        app.input_insert('h');
+        app.input_insert('i');
+        assert_eq!(app.input_text, "hi");
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn test_input_backspace() {
+        let mut app = test_app();
+        app.input_insert('a');
+        app.input_insert('b');
+        app.input_insert('c');
+        app.input_backspace();
+        assert_eq!(app.input_text, "ab");
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn test_input_backspace_empty() {
+        let mut app = test_app();
+        app.input_backspace();
+        assert_eq!(app.input_text, "");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn test_input_clear() {
+        let mut app = test_app();
+        app.input_insert('a');
+        app.input_insert('b');
+        app.input_clear();
+        assert_eq!(app.input_text, "");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    // ── Filter tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_filtered_subscriptions_no_filter() {
+        let mut app = test_app();
+        let sub = crate::db::Subscription {
+            id: "ch1".to_string(),
+            name: "Foo".to_string(),
+            url: "https://youtube.com/channel/ch1".to_string(),
+            added_at: None,
+        };
+        app.db.add_subscription(&sub).unwrap();
+        app.load_subscriptions();
+
+        let filtered = app.filtered_subscriptions();
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filtered_subscriptions_with_filter() {
+        let mut app = test_app();
+        app.db.add_subscription(&crate::db::Subscription {
+            id: "ch1".to_string(),
+            name: "Foo Bar".to_string(),
+            url: "https://youtube.com/channel/ch1".to_string(),
+            added_at: None,
+        }).unwrap();
+        app.db.add_subscription(&crate::db::Subscription {
+            id: "ch2".to_string(),
+            name: "Baz Qux".to_string(),
+            url: "https://youtube.com/channel/ch2".to_string(),
+            added_at: None,
+        }).unwrap();
+        app.load_subscriptions();
+        app.filter_text = "foo".to_string();
+
+        let filtered = app.filtered_subscriptions();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "Foo Bar");
+    }
+
+    #[test]
+    fn test_filtered_videos_hides_shorts() {
+        let mut app = test_app();
+        app.screen = Screen::Videos;
+        app.videos = vec![
+            make_video("v1", "ch1", false),
+            make_video("v2", "ch1", true),
+            make_video("v3", "ch1", false),
+        ];
+        app.hide_shorts = true;
+
+        let filtered = app.filtered_videos();
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|v| !v.is_short));
+    }
+
+    #[test]
+    fn test_filtered_videos_shows_shorts() {
+        let mut app = test_app();
+        app.screen = Screen::Videos;
+        app.videos = vec![
+            make_video("v1", "ch1", false),
+            make_video("v2", "ch1", true),
+        ];
+        app.hide_shorts = false;
+
+        let filtered = app.filtered_videos();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filtered_videos_text_filter() {
+        let mut app = test_app();
+        app.screen = Screen::Videos;
+        let mut v1 = make_video("v1", "ch1", false);
+        v1.title = "Rust tutorial".to_string();
+        let mut v2 = make_video("v2", "ch1", false);
+        v2.title = "Python basics".to_string();
+        app.videos = vec![v1, v2];
+        app.filter_text = "rust".to_string();
+
+        let filtered = app.filtered_videos();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].title, "Rust tutorial");
+    }
+
+    #[test]
+    fn test_filtered_videos_search_screen() {
+        let mut app = test_app();
+        app.screen = Screen::Search;
+        app.search_results = vec![
+            make_video("s1", "ch1", false),
+            make_video("s2", "ch1", false),
+        ];
+        app.videos = vec![make_video("v1", "ch1", false)]; // should be ignored
+
+        let filtered = app.filtered_videos();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    // ── Navigation tests ─────────────────────────────────────
+
+    #[test]
+    fn test_navigate_to_videos() {
+        let mut app = test_app();
+        let ch = crate::db::Subscription {
+            id: "ch1".to_string(),
+            name: "Test".to_string(),
+            url: "https://youtube.com/channel/ch1".to_string(),
+            added_at: None,
+        };
+        app.navigate_to_videos(Some(ch), 2);
+        assert_eq!(app.screen, Screen::Videos);
+        assert_eq!(app.mode, Mode::List);
+        assert_eq!(app.saved_channel_index, 2);
+        assert_eq!(app.video_selected, 0);
+        assert!(app.filter_text.is_empty());
+    }
+
+    #[test]
+    fn test_navigate_back() {
+        let mut app = test_app();
+        app.screen = Screen::Videos;
+        app.saved_channel_index = 3;
+        app.filter_text = "something".to_string();
+        app.navigate_back();
+
+        assert_eq!(app.screen, Screen::Channels);
+        assert_eq!(app.channel_selected, 3);
+        assert!(app.filter_text.is_empty());
+        assert!(app.current_channel.is_none());
+    }
+
+    #[test]
+    fn test_navigate_back_clamps_index() {
+        let mut app = test_app();
+        app.db.add_subscription(&crate::db::Subscription {
+            id: "ch1".to_string(),
+            name: "Test".to_string(),
+            url: "https://youtube.com/channel/ch1".to_string(),
+            added_at: None,
+        }).unwrap();
+        app.load_subscriptions();
+        app.saved_channel_index = 10; // larger than subscription count
+        app.navigate_back();
+
+        assert_eq!(app.channel_selected, 0); // clamped to len-1 = 0
+    }
+
+    #[test]
+    fn test_navigate_to_search() {
+        let mut app = test_app();
+        app.navigate_to_search("rust tutorials".to_string());
+        assert_eq!(app.screen, Screen::Search);
+        assert_eq!(app.search_query, "rust tutorials");
+        assert_eq!(app.search_selected, 0);
+    }
+
+    // ── Message tests ────────────────────────────────────────
+
+    #[test]
+    fn test_set_message() {
+        let mut app = test_app();
+        app.set_message("hello");
+        assert!(app.status_message.is_some());
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.text, "hello");
+        assert!(!msg.is_error);
+    }
+
+    #[test]
+    fn test_set_error() {
+        let mut app = test_app();
+        app.set_error("bad thing");
+        assert!(app.status_message.is_some());
+        assert!(app.status_message.as_ref().unwrap().is_error);
+    }
+
+    #[test]
+    fn test_clear_expired_messages() {
+        let mut app = test_app();
+        app.set_message("test");
+        // Message just created, should not expire
+        app.clear_expired_messages();
+        assert!(app.status_message.is_some());
+    }
+
+    // ── Toggle tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_toggle_shorts() {
+        let mut app = test_app();
+        assert!(app.hide_shorts); // default true
+        app.toggle_shorts();
+        assert!(!app.hide_shorts);
+        app.toggle_shorts();
+        assert!(app.hide_shorts);
+    }
+
+    #[test]
+    fn test_toggle_watched_current() {
+        let mut app = test_app();
+        app.screen = Screen::Videos;
+        app.videos = vec![make_video("v1", "ch1", false)];
+        app.video_selected = 0;
+
+        app.toggle_watched_current();
+        assert!(app.watched_ids.contains("v1"));
+
+        app.toggle_watched_current();
+        assert!(!app.watched_ids.contains("v1"));
+    }
+
+    // ── Pagination tests ─────────────────────────────────────
+
+    #[test]
+    fn test_total_pages() {
+        let mut app = test_app();
+        app.page_size = 100;
+        app.total_videos = 250;
+        assert_eq!(app.total_pages(), 3);
+    }
+
+    #[test]
+    fn test_total_pages_exact() {
+        let mut app = test_app();
+        app.page_size = 100;
+        app.total_videos = 200;
+        assert_eq!(app.total_pages(), 2);
+    }
+
+    #[test]
+    fn test_total_pages_zero_page_size() {
+        let mut app = test_app();
+        app.page_size = 0;
+        app.total_videos = 100;
+        assert_eq!(app.total_pages(), 1);
+    }
+
+    #[test]
+    fn test_total_pages_zero_videos() {
+        let mut app = test_app();
+        app.page_size = 100;
+        app.total_videos = 0;
+        assert_eq!(app.total_pages(), 0);
     }
 }

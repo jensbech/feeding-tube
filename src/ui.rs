@@ -3,6 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, Wrap};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode, Screen};
 use crate::db::{format_views, Video};
@@ -67,7 +68,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         | Mode::ConfirmPrimeAll
         | Mode::ConfirmMarkAll
         | Mode::ConfirmMarkAllVideos
-        | Mode::ConfirmAddChannel => {
+        | Mode::ConfirmAddChannel
+        | Mode::ConfirmChannelWatched => {
             draw_confirm_overlay(f, app);
         }
         _ => {}
@@ -109,6 +111,22 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     if !subtitle.is_empty() {
         spans.push(Span::styled(
             format!(" ({})", subtitle),
+            Style::default().fg(GRAY),
+        ));
+    }
+
+    // Watched progress (channel video view only)
+    if app.screen == Screen::Videos {
+        let filtered = app.filtered_videos();
+        let total = filtered.len();
+        let watched = filtered.iter().filter(|v| app.watched_ids.contains(&v.id)).count();
+        spans.push(Span::styled(" │ ", Style::default().fg(DARK_GRAY)));
+        spans.push(Span::styled(
+            format!("{}/{}", watched, total),
+            Style::default().fg(if watched == total && total > 0 { GREEN } else { GRAY }),
+        ));
+        spans.push(Span::styled(
+            " watched",
             Style::default().fg(GRAY),
         ));
     }
@@ -234,7 +252,49 @@ fn draw_channel_list(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let visible_count = area.height as usize;
+    // Split area into header row + content
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+    let header_area = chunks[0];
+    let content_area = chunks[1];
+
+    let width = area.width as usize;
+    let pointer_col = 2;
+    let videos_col = 7;
+    let latest_col = 8;
+    let name_col = width.saturating_sub(pointer_col + videos_col + latest_col);
+
+    // Header row
+    let header = Row::new(vec![
+        ratatui::widgets::Cell::from(Span::styled(
+            pad_str("", pointer_col),
+            Style::default().fg(DIM_FG),
+        )),
+        ratatui::widgets::Cell::from(Span::styled(
+            pad_str("Channel", name_col),
+            Style::default().fg(DIM_FG),
+        )),
+        ratatui::widgets::Cell::from(Span::styled(
+            pad_str("Videos", videos_col),
+            Style::default().fg(DIM_FG),
+        )),
+        ratatui::widgets::Cell::from(Span::styled(
+            pad_str("Latest", latest_col),
+            Style::default().fg(DIM_FG),
+        )),
+    ])
+    .style(Style::default().bg(BODY_BG));
+
+    let header_table = Table::new(vec![header], [
+        Constraint::Length(pointer_col as u16),
+        Constraint::Length(name_col as u16),
+        Constraint::Length(videos_col as u16),
+        Constraint::Length(latest_col as u16),
+    ])
+    .style(Style::default().bg(BODY_BG));
+
+    f.render_widget(header_table, header_area);
+
+    let visible_count = content_area.height as usize;
     let scroll = app.channel_scroll;
     let selected = app.channel_selected;
 
@@ -245,35 +305,59 @@ fn draw_channel_list(f: &mut Frame, app: &App, area: Rect) {
         .take(visible_count)
         .map(|(i, sub)| {
             let is_selected = i == selected;
-            let has_new = app.new_counts.get(&sub.id).copied().unwrap_or(0) > 0;
+            let new_count = app.new_counts.get(&sub.id).copied().unwrap_or(0);
             let is_fully_watched = app.fully_watched.contains(&sub.id);
 
-            let pointer = if is_selected { "▶ " } else { "  " };
+            let pointer = if is_selected { "▶" } else { " " };
 
-            let mut spans = vec![
-                Span::styled(
-                    pointer,
-                    Style::default().fg(if is_selected { ACCENT } else { BODY_BG }),
-                ),
-                Span::styled(
-                    &sub.name,
-                    if is_selected {
-                        Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
-                    } else if is_fully_watched {
-                        Style::default().fg(DIM_FG)
-                    } else {
-                        Style::default().fg(LIGHT_GRAY)
-                    },
-                ),
-            ];
+            let name_style = if is_selected {
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+            } else if new_count > 0 {
+                Style::default().fg(GREEN)
+            } else if is_fully_watched {
+                Style::default().fg(DIM_FG)
+            } else {
+                Style::default().fg(LIGHT_GRAY)
+            };
 
-            if has_new {
-                let count = app.new_counts.get(&sub.id).copied().unwrap_or(0);
-                spans.push(Span::styled(
-                    format!(" ● {}", count),
-                    Style::default().fg(GREEN),
-                ));
-            }
+            // Build name cell with (+N) suffix when there are new videos
+            let new_suffix = if new_count > 999 {
+                " (+999)".to_string()
+            } else if new_count > 0 {
+                format!(" (+{})", new_count)
+            } else {
+                String::new()
+            };
+            let suffix_width = new_suffix.len();
+            let available_name = name_col.saturating_sub(suffix_width);
+            let name_display = truncate_str(&sub.name, available_name.saturating_sub(1));
+            let name_cell = if new_count > 0 {
+                ratatui::widgets::Cell::from(Line::from(vec![
+                    Span::styled(name_display.clone(), name_style),
+                    Span::styled(
+                        pad_str(&new_suffix, name_col.saturating_sub(name_display.len())),
+                        Style::default().fg(GREEN),
+                    ),
+                ]))
+            } else {
+                ratatui::widgets::Cell::from(Span::styled(
+                    pad_str(&name_display, name_col),
+                    name_style,
+                ))
+            };
+
+            let stats = app.channel_stats.get(&sub.id);
+            let video_count_display = stats
+                .map(|s| s.video_count.to_string())
+                .unwrap_or_default();
+            let latest_display = stats
+                .and_then(|s| s.latest_date.as_ref())
+                .and_then(|d| {
+                    chrono::DateTime::parse_from_rfc3339(d)
+                        .ok()
+                        .map(|dt| crate::db::get_relative_date(dt.with_timezone(&chrono::Utc)))
+                })
+                .unwrap_or_default();
 
             let bg = if is_selected {
                 HIGHLIGHT_BG
@@ -283,15 +367,34 @@ fn draw_channel_list(f: &mut Frame, app: &App, area: Rect) {
                 ZEBRA_DARK
             };
 
-            Row::new(vec![ratatui::widgets::Cell::from(Line::from(spans))])
-                .style(Style::default().bg(bg))
+            Row::new(vec![
+                ratatui::widgets::Cell::from(Span::styled(
+                    pointer,
+                    Style::default().fg(if is_selected { ACCENT } else { BODY_BG }),
+                )),
+                name_cell,
+                ratatui::widgets::Cell::from(Span::styled(
+                    pad_str(&video_count_display, videos_col),
+                    Style::default().fg(if is_selected { CYAN } else { GRAY }),
+                )),
+                ratatui::widgets::Cell::from(Span::styled(
+                    pad_str(&latest_display, latest_col),
+                    Style::default().fg(if is_selected { CYAN } else { GRAY }),
+                )),
+            ])
+            .style(Style::default().bg(bg))
         })
         .collect();
 
-    let table = Table::new(rows, [Constraint::Percentage(100)])
-        .style(Style::default().bg(BODY_BG));
+    let table = Table::new(rows, [
+        Constraint::Length(pointer_col as u16),
+        Constraint::Length(name_col as u16),
+        Constraint::Length(videos_col as u16),
+        Constraint::Length(latest_col as u16),
+    ])
+    .style(Style::default().bg(BODY_BG));
 
-    f.render_widget(table, area);
+    f.render_widget(table, content_area);
 
     // Scrollbar
     if filtered.len() > visible_count {
@@ -301,7 +404,7 @@ fn draw_channel_list(f: &mut Frame, app: &App, area: Rect) {
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_style(Style::default().fg(ACCENT))
                 .track_style(Style::default().fg(DARK_GRAY)),
-            area,
+            content_area,
             &mut scrollbar_state,
         );
     }
@@ -365,18 +468,65 @@ fn draw_video_table(
     selected: usize,
     scroll: usize,
 ) {
+    // Split area into header row + content
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+    let header_area = chunks[0];
+    let content_area = chunks[1];
+
     let width = area.width as usize;
-    let visible_count = area.height as usize;
 
     let channel_col = if show_channel { 32.min(width / 3) } else { 0 };
     let date_col = 8;
-    let is_search = app.screen == Screen::Search;
-    let duration_col = if is_search { 8 } else { 0 };
-    let views_col = if is_search { 8 } else { 0 };
-    let indicator_col = 2;
+    let duration_col = 8;
+    let views_col = 8;
     let pointer_col = 3;
     let title_col = width
-        .saturating_sub(pointer_col + channel_col + date_col + duration_col + views_col + indicator_col + 2);
+        .saturating_sub(pointer_col + channel_col + date_col + duration_col + views_col + 2);
+
+    // Header row
+    let mut header_cells: Vec<ratatui::widgets::Cell> = Vec::new();
+    header_cells.push(ratatui::widgets::Cell::from(Span::styled(
+        pad_str("", pointer_col),
+        Style::default().fg(DIM_FG),
+    )));
+    if show_channel {
+        header_cells.push(ratatui::widgets::Cell::from(Span::styled(
+            pad_str("Channel", channel_col),
+            Style::default().fg(DIM_FG),
+        )));
+    }
+    header_cells.push(ratatui::widgets::Cell::from(Span::styled(
+        pad_str("Title", title_col),
+        Style::default().fg(DIM_FG),
+    )));
+    header_cells.push(ratatui::widgets::Cell::from(Span::styled(
+        pad_str("Dur", duration_col),
+        Style::default().fg(DIM_FG),
+    )));
+    header_cells.push(ratatui::widgets::Cell::from(Span::styled(
+        pad_str("Views", views_col),
+        Style::default().fg(DIM_FG),
+    )));
+    header_cells.push(ratatui::widgets::Cell::from(Span::styled(
+        pad_str("Date", date_col),
+        Style::default().fg(DIM_FG),
+    )));
+
+    let mut header_widths: Vec<Constraint> = vec![Constraint::Length(pointer_col as u16)];
+    if show_channel {
+        header_widths.push(Constraint::Length(channel_col as u16));
+    }
+    header_widths.push(Constraint::Length(title_col as u16));
+    header_widths.push(Constraint::Length(duration_col as u16));
+    header_widths.push(Constraint::Length(views_col as u16));
+    header_widths.push(Constraint::Length(date_col as u16));
+
+    let header_table = Table::new(vec![Row::new(header_cells)], header_widths.clone())
+        .style(Style::default().bg(BODY_BG));
+
+    f.render_widget(header_table, header_area);
+
+    let visible_count = content_area.height as usize;
 
     let rows: Vec<Row> = videos
         .iter()
@@ -429,39 +579,40 @@ fn draw_video_table(
                 },
             )));
 
-            // Duration (search only)
-            if is_search {
-                let dur = video
-                    .duration_string
-                    .as_deref()
-                    .unwrap_or("--:--");
-                cells.push(ratatui::widgets::Cell::from(Span::styled(
-                    pad_str(dur, duration_col),
-                    Style::default().fg(if is_selected { CYAN } else { GRAY }),
-                )));
-            }
+            // Duration + short tag
+            let dur = video
+                .duration_string
+                .as_deref()
+                .unwrap_or("--:--");
+            let dur_display = if video.is_short {
+                format!("{}S", dur.trim_end())
+            } else {
+                dur.to_string()
+            };
+            let dur_color = if is_selected {
+                CYAN
+            } else if video.is_short {
+                DIM_FG
+            } else {
+                GRAY
+            };
+            cells.push(ratatui::widgets::Cell::from(Span::styled(
+                pad_str(&dur_display, duration_col),
+                Style::default().fg(dur_color),
+            )));
 
-            // Views (search only)
-            if is_search {
-                let views = format_views(video.view_count);
-                cells.push(ratatui::widgets::Cell::from(Span::styled(
-                    pad_str(&views, views_col),
-                    Style::default().fg(if is_selected { CYAN } else { MAGENTA }),
-                )));
-            }
+            // Views (always shown)
+            let views = format_views(video.view_count);
+            cells.push(ratatui::widgets::Cell::from(Span::styled(
+                pad_str(&views, views_col),
+                Style::default().fg(if is_selected { CYAN } else { MAGENTA }),
+            )));
 
             // Date
             let date_display = &video.relative_date;
             cells.push(ratatui::widgets::Cell::from(Span::styled(
                 pad_str(date_display, date_col),
                 Style::default().fg(if is_selected { CYAN } else { GRAY }),
-            )));
-
-            // Unwatched indicator
-            let indicator = if !is_watched { "●" } else { " " };
-            cells.push(ratatui::widgets::Cell::from(Span::styled(
-                indicator,
-                Style::default().fg(GREEN),
             )));
 
             let bg = if is_selected {
@@ -476,22 +627,10 @@ fn draw_video_table(
         })
         .collect();
 
-    let mut widths: Vec<Constraint> = vec![Constraint::Length(pointer_col as u16)];
-    if show_channel {
-        widths.push(Constraint::Length(channel_col as u16));
-    }
-    widths.push(Constraint::Length(title_col as u16));
-    if is_search {
-        widths.push(Constraint::Length(duration_col as u16));
-        widths.push(Constraint::Length(views_col as u16));
-    }
-    widths.push(Constraint::Length(date_col as u16));
-    widths.push(Constraint::Length(indicator_col as u16));
-
-    let table = Table::new(rows, widths)
+    let table = Table::new(rows, header_widths)
         .style(Style::default().bg(BODY_BG));
 
-    f.render_widget(table, area);
+    f.render_widget(table, content_area);
 
     // Scrollbar
     if videos.len() > visible_count {
@@ -501,7 +640,7 @@ fn draw_video_table(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_style(Style::default().fg(ACCENT))
                 .track_style(Style::default().fg(DARK_GRAY)),
-            area,
+            content_area,
             &mut scrollbar_state,
         );
     }
@@ -636,17 +775,33 @@ fn key_hint<'a>(key: &'a str, desc: &'a str) -> Span<'a> {
     )
 }
 
+// ── Modal Helpers ──────────────────────────────────────────
+
+fn modal_area(f: &Frame, width: u16, height: u16) -> Rect {
+    let area = f.area();
+    let w = width.min(area.width.saturating_sub(4));
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = area.height / 3;
+    Rect::new(x, y, w, height)
+}
+
+fn modal_block(title: &str) -> Block<'_> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            format!(" {} ", title),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ))
+        .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+        .style(Style::default().bg(BODY_BG))
+}
+
 // ── Input Overlay ──────────────────────────────────────────
 
 fn draw_input_overlay(f: &mut Frame, app: &App) {
-    let area = f.area();
-    let width = 60.min(area.width.saturating_sub(4));
-    let height = 4;
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = area.height / 3;
-    let modal_area = Rect::new(x, y, width, height);
-
-    f.render_widget(Clear, modal_area);
+    let area = modal_area(f, 60, 6);
+    f.render_widget(Clear, area);
 
     let (title, placeholder) = match app.mode {
         Mode::Add => ("Add Channel", "https://youtube.com/@channel"),
@@ -667,15 +822,6 @@ fn draw_input_overlay(f: &mut Frame, app: &App) {
         Style::default().fg(LIGHT_GRAY)
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
-        .title(Span::styled(
-            format!(" {} ", title),
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(BODY_BG));
-
     let content = vec![
         Line::from(Span::styled(display_text, text_style)),
         Line::from(Span::styled(
@@ -684,22 +830,13 @@ fn draw_input_overlay(f: &mut Frame, app: &App) {
         )),
     ];
 
-    let paragraph = Paragraph::new(content).block(block);
-    f.render_widget(paragraph, modal_area);
+    let paragraph = Paragraph::new(content).block(modal_block(title));
+    f.render_widget(paragraph, area);
 }
 
 // ── Confirm Overlay ────────────────────────────────────────
 
 fn draw_confirm_overlay(f: &mut Frame, app: &App) {
-    let area = f.area();
-    let width = 56.min(area.width.saturating_sub(4));
-    let height = 5;
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = area.height / 3;
-    let modal_area = Rect::new(x, y, width, height);
-
-    f.render_widget(Clear, modal_area);
-
     let (title, message, hint) = match app.mode {
         Mode::ConfirmDelete => {
             let filtered = app.filtered_subscriptions();
@@ -735,7 +872,7 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
         }
         Mode::ConfirmMarkAll => (
             "Mark All Read",
-            "Clear all new video indicators?".to_string(),
+            "Mark all channels as read?".to_string(),
             "y:Yes  n:No",
         ),
         Mode::ConfirmMarkAllVideos => {
@@ -743,6 +880,18 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
             (
                 "Mark All Watched",
                 format!("Mark all {} videos as watched?", count),
+                "y:Yes  n:No",
+            )
+        }
+        Mode::ConfirmChannelWatched => {
+            let name = app
+                .filtered_subscriptions()
+                .get(app.channel_selected)
+                .map(|s| s.name.as_str())
+                .unwrap_or("?");
+            (
+                "Mark Watched",
+                format!("Mark all videos in \"{}\" as watched?", name),
                 "y:Yes  n:No",
             )
         }
@@ -761,14 +910,8 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
         _ => ("Confirm", String::new(), ""),
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
-        .title(Span::styled(
-            format!(" {} ", title),
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(BODY_BG));
+    let area = modal_area(f, 56, 7);
+    f.render_widget(Clear, area);
 
     let content = vec![
         Line::from(Span::styled(message, Style::default().fg(LIGHT_GRAY))),
@@ -776,8 +919,8 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
         Line::from(Span::styled(hint, Style::default().fg(GRAY))),
     ];
 
-    let paragraph = Paragraph::new(content).block(block);
-    f.render_widget(paragraph, modal_area);
+    let paragraph = Paragraph::new(content).block(modal_block(title));
+    f.render_widget(paragraph, area);
 }
 
 // ── Description Panel (Modal) ──────────────────────────────
@@ -877,21 +1020,46 @@ fn dim_background(f: &mut Frame) {
 // ── Utility Functions ──────────────────────────────────────
 
 fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    let display_width = UnicodeWidthStr::width(s);
+    if display_width <= max_len {
         s.to_string()
     } else if max_len <= 1 {
         ".".to_string()
     } else {
-        let truncated: String = s.chars().take(max_len - 1).collect();
-        format!("{}…", truncated)
+        let mut width = 0;
+        let mut result = String::new();
+        for c in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if width + cw > max_len - 1 {
+                break;
+            }
+            result.push(c);
+            width += cw;
+        }
+        format!("{}…", result)
     }
 }
 
 fn pad_str(s: &str, width: usize) -> String {
-    if s.len() >= width {
-        s.chars().take(width).collect()
+    let display_width = UnicodeWidthStr::width(s);
+    if display_width >= width {
+        // Truncate to fit
+        let mut w = 0;
+        let mut result = String::new();
+        for c in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if w + cw > width {
+                break;
+            }
+            result.push(c);
+            w += cw;
+        }
+        if w < width {
+            result.push_str(&" ".repeat(width - w));
+        }
+        result
     } else {
-        format!("{}{}", s, " ".repeat(width - s.len()))
+        format!("{}{}", s, " ".repeat(width - display_width))
     }
 }
 
@@ -901,16 +1069,21 @@ fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
     }
     let mut lines = Vec::new();
     let mut current = String::new();
+    let mut current_width: usize = 0;
 
     for word in text.split_whitespace() {
+        let word_width = UnicodeWidthStr::width(word);
         if current.is_empty() {
             current = word.to_string();
-        } else if current.len() + 1 + word.len() <= max_width {
+            current_width = word_width;
+        } else if current_width + 1 + word_width <= max_width {
             current.push(' ');
             current.push_str(word);
+            current_width += 1 + word_width;
         } else {
             lines.push(current);
             current = word.to_string();
+            current_width = word_width;
         }
     }
     if !current.is_empty() {
@@ -920,4 +1093,124 @@ fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── truncate_str tests ───────────────────────────────────
+
+    #[test]
+    fn test_truncate_str_short_string() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_exact_fit() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_too_long() {
+        let result = truncate_str("hello world", 8);
+        assert_eq!(result, "hello w…");
+    }
+
+    #[test]
+    fn test_truncate_str_very_small_max() {
+        assert_eq!(truncate_str("hello", 1), ".");
+        assert_eq!(truncate_str("hello", 0), ".");
+    }
+
+    #[test]
+    fn test_truncate_str_max_two() {
+        let result = truncate_str("hello", 2);
+        assert_eq!(result, "h…");
+    }
+
+    #[test]
+    fn test_truncate_str_empty() {
+        assert_eq!(truncate_str("", 10), "");
+    }
+
+    #[test]
+    fn test_truncate_str_unicode() {
+        // CJK characters are double-width
+        let result = truncate_str("日本語テスト", 8);
+        // Each CJK char = 2 width, so 3 chars = 6 width + ellipsis = 7
+        assert!(UnicodeWidthStr::width(result.as_str()) <= 8);
+        assert!(result.ends_with('…'));
+    }
+
+    // ── pad_str tests ────────────────────────────────────────
+
+    #[test]
+    fn test_pad_str_needs_padding() {
+        let result = pad_str("hi", 5);
+        assert_eq!(result, "hi   ");
+    }
+
+    #[test]
+    fn test_pad_str_exact_width() {
+        let result = pad_str("hello", 5);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_pad_str_too_long() {
+        let result = pad_str("hello world", 5);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_pad_str_empty() {
+        let result = pad_str("", 3);
+        assert_eq!(result, "   ");
+    }
+
+    #[test]
+    fn test_pad_str_unicode() {
+        // "日" is 2 display width
+        let result = pad_str("日", 4);
+        assert_eq!(result, "日  "); // 2 char width + 2 spaces = 4
+    }
+
+    // ── word_wrap tests ──────────────────────────────────────
+
+    #[test]
+    fn test_word_wrap_short_line() {
+        let result = word_wrap("hello world", 20);
+        assert_eq!(result, vec!["hello world"]);
+    }
+
+    #[test]
+    fn test_word_wrap_wraps() {
+        let result = word_wrap("hello world foo bar", 11);
+        assert_eq!(result, vec!["hello world", "foo bar"]);
+    }
+
+    #[test]
+    fn test_word_wrap_each_word() {
+        let result = word_wrap("aaa bbb ccc", 3);
+        assert_eq!(result, vec!["aaa", "bbb", "ccc"]);
+    }
+
+    #[test]
+    fn test_word_wrap_empty() {
+        let result = word_wrap("", 10);
+        assert_eq!(result, vec![""]);
+    }
+
+    #[test]
+    fn test_word_wrap_zero_width() {
+        let result = word_wrap("hello world", 0);
+        assert_eq!(result, vec!["hello world"]);
+    }
+
+    #[test]
+    fn test_word_wrap_single_long_word() {
+        let result = word_wrap("superlongword", 5);
+        assert_eq!(result, vec!["superlongword"]); // word too long, kept as-is
+    }
 }

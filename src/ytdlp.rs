@@ -529,6 +529,12 @@ async fn fetch_video_batch(
                 .map(|d| get_relative_date(d))
                 .unwrap_or_default();
 
+            let duration_string = data["duration_string"]
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format_duration(duration));
+            let view_count = data["view_count"].as_u64();
+
             videos.push(Video {
                 id: data["id"].as_str().unwrap_or("").to_string(),
                 title: data["title"].as_str().unwrap_or("").to_string(),
@@ -548,8 +554,8 @@ async fn fetch_video_batch(
                 stored_at: None,
                 relative_date,
                 duration,
-                duration_string: None,
-                view_count: None,
+                duration_string: Some(duration_string),
+                view_count,
             });
         }
     }
@@ -689,4 +695,230 @@ fn parse_date_yyyymmdd(s: &str) -> Option<DateTime<Utc>> {
     NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|d| d.and_hms_opt(0, 0, 0))
         .map(|dt| dt.and_utc())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_valid_youtube_url tests ───────────────────────────
+
+    #[test]
+    fn test_valid_youtube_channel_url() {
+        assert!(is_valid_youtube_url("https://www.youtube.com/@channel"));
+        assert!(is_valid_youtube_url("https://youtube.com/@channel"));
+        assert!(is_valid_youtube_url("http://www.youtube.com/@channel"));
+    }
+
+    #[test]
+    fn test_valid_youtube_video_url() {
+        assert!(is_valid_youtube_url(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ));
+        assert!(is_valid_youtube_url("https://youtu.be/dQw4w9WgXcQ"));
+    }
+
+    #[test]
+    fn test_valid_youtube_channel_path() {
+        assert!(is_valid_youtube_url(
+            "https://www.youtube.com/channel/UC1234"
+        ));
+    }
+
+    #[test]
+    fn test_invalid_youtube_url() {
+        assert!(!is_valid_youtube_url("https://example.com"));
+        assert!(!is_valid_youtube_url("not-a-url"));
+        assert!(!is_valid_youtube_url(""));
+        assert!(!is_valid_youtube_url("ftp://youtube.com/@channel"));
+    }
+
+    // ── is_valid_video_id tests ──────────────────────────────
+
+    #[test]
+    fn test_valid_video_id() {
+        assert!(is_valid_video_id("dQw4w9WgXcQ"));
+        assert!(is_valid_video_id("abcdefghijk"));
+        assert!(is_valid_video_id("_-_________"));
+    }
+
+    #[test]
+    fn test_invalid_video_id() {
+        assert!(!is_valid_video_id(""));
+        assert!(!is_valid_video_id("short"));
+        assert!(!is_valid_video_id("way_too_long_id_here"));
+        assert!(!is_valid_video_id("has spaces!"));
+    }
+
+    // ── sanitize_search_query tests ──────────────────────────
+
+    #[test]
+    fn test_sanitize_search_query_normal() {
+        assert_eq!(sanitize_search_query("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_sanitize_search_query_trims() {
+        assert_eq!(sanitize_search_query("  hello  "), "hello");
+    }
+
+    #[test]
+    fn test_sanitize_search_query_truncates() {
+        let long = "a".repeat(600);
+        let result = sanitize_search_query(&long);
+        assert_eq!(result.len(), 500);
+    }
+
+    #[test]
+    fn test_sanitize_search_query_empty() {
+        assert_eq!(sanitize_search_query(""), "");
+    }
+
+    // ── extract_xml_tag tests ────────────────────────────────
+
+    #[test]
+    fn test_extract_xml_tag() {
+        let xml = "<entry><title>Hello World</title></entry>";
+        assert_eq!(extract_xml_tag(xml, "title"), Some("Hello World".to_string()));
+    }
+
+    #[test]
+    fn test_extract_xml_tag_missing() {
+        let xml = "<entry><title>Hello</title></entry>";
+        assert_eq!(extract_xml_tag(xml, "missing"), None);
+    }
+
+    #[test]
+    fn test_extract_xml_attr() {
+        let xml = r#"<link rel="alternate" href="https://example.com"/>"#;
+        assert_eq!(
+            extract_xml_attr(xml, "link", "href"),
+            Some("https://example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_xml_attr_missing() {
+        let xml = r#"<link rel="alternate"/>"#;
+        assert_eq!(extract_xml_attr(xml, "link", "href"), None);
+    }
+
+    // ── parse_rss_entry tests ────────────────────────────────
+
+    #[test]
+    fn test_parse_rss_entry_valid() {
+        let entry = r#"
+            <yt:videoId>dQw4w9WgXcQ</yt:videoId>
+            <title>Test Video</title>
+            <published>2024-01-15T10:30:00+00:00</published>
+            <link rel="alternate" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ"/>
+        "#;
+        let video = parse_rss_entry(entry, "ch1", "TestChannel");
+        assert!(video.is_some());
+        let v = video.unwrap();
+        assert_eq!(v.id, "dQw4w9WgXcQ");
+        assert_eq!(v.title, "Test Video");
+        assert_eq!(v.channel_id, Some("ch1".to_string()));
+        assert_eq!(v.channel_name, Some("TestChannel".to_string()));
+        assert!(v.published_date.is_some());
+    }
+
+    #[test]
+    fn test_parse_rss_entry_missing_id() {
+        let entry = "<title>Test Video</title>";
+        let video = parse_rss_entry(entry, "ch1", "TestChannel");
+        assert!(video.is_none());
+    }
+
+    #[test]
+    fn test_parse_rss_entry_missing_title() {
+        let entry = "<yt:videoId>abc12345678</yt:videoId>";
+        let video = parse_rss_entry(entry, "ch1", "TestChannel");
+        assert!(video.is_none());
+    }
+
+    #[test]
+    fn test_parse_rss_entry_entities_in_title() {
+        let entry = r#"
+            <yt:videoId>dQw4w9WgXcQ</yt:videoId>
+            <title>Tom &amp; Jerry</title>
+        "#;
+        let video = parse_rss_entry(entry, "ch1", "TestChannel").unwrap();
+        assert_eq!(video.title, "Tom & Jerry");
+    }
+
+    // ── parse_rss_feed tests ─────────────────────────────────
+
+    #[test]
+    fn test_parse_rss_feed_multiple_entries() {
+        let xml = r#"
+            <feed>
+                <entry>
+                    <yt:videoId>id1id1id1id</yt:videoId>
+                    <title>Video 1</title>
+                </entry>
+                <entry>
+                    <yt:videoId>id2id2id2id</yt:videoId>
+                    <title>Video 2</title>
+                </entry>
+            </feed>
+        "#;
+        let videos = parse_rss_feed(xml, "ch1", "TestChannel");
+        assert_eq!(videos.len(), 2);
+        assert_eq!(videos[0].id, "id1id1id1id");
+        assert_eq!(videos[1].id, "id2id2id2id");
+    }
+
+    #[test]
+    fn test_parse_rss_feed_empty() {
+        let xml = "<feed></feed>";
+        let videos = parse_rss_feed(xml, "ch1", "TestChannel");
+        assert!(videos.is_empty());
+    }
+
+    #[test]
+    fn test_parse_rss_feed_invalid_entry() {
+        let xml = r#"
+            <feed>
+                <entry>
+                    <title>No ID</title>
+                </entry>
+                <entry>
+                    <yt:videoId>validId12345</yt:videoId>
+                    <title>Has ID</title>
+                </entry>
+            </feed>
+        "#;
+        let videos = parse_rss_feed(xml, "ch1", "TestChannel");
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0].title, "Has ID");
+    }
+
+    // ── parse_date_yyyymmdd tests ────────────────────────────
+
+    #[test]
+    fn test_parse_date_valid() {
+        let date = parse_date_yyyymmdd("20240115");
+        assert!(date.is_some());
+        let d = date.unwrap();
+        assert_eq!(d.format("%Y-%m-%d").to_string(), "2024-01-15");
+    }
+
+    #[test]
+    fn test_parse_date_invalid_length() {
+        assert!(parse_date_yyyymmdd("2024").is_none());
+        assert!(parse_date_yyyymmdd("").is_none());
+        assert!(parse_date_yyyymmdd("202401151").is_none());
+    }
+
+    #[test]
+    fn test_parse_date_invalid_date() {
+        assert!(parse_date_yyyymmdd("20241301").is_none()); // month 13
+        assert!(parse_date_yyyymmdd("20240132").is_none()); // day 32
+    }
+
+    #[test]
+    fn test_parse_date_not_numbers() {
+        assert!(parse_date_yyyymmdd("abcdefgh").is_none());
+    }
 }

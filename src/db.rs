@@ -54,6 +54,12 @@ pub struct PaginatedResult {
     pub videos: Vec<Video>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ChannelStats {
+    pub video_count: usize,
+    pub latest_date: Option<String>,
+}
+
 pub struct Database {
     conn: Connection,
     db_path: PathBuf,
@@ -69,6 +75,20 @@ fn db_path() -> PathBuf {
 }
 
 impl Database {
+    #[cfg(test)]
+    pub fn open_in_memory() -> Result<Self, String> {
+        let conn =
+            Connection::open_in_memory().map_err(|e| format!("Failed to open in-memory db: {e}"))?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+            .map_err(|e| format!("Failed to set pragmas: {e}"))?;
+        let db = Database {
+            conn,
+            db_path: PathBuf::from(":memory:"),
+        };
+        db.create_schema()?;
+        Ok(db)
+    }
+
     pub fn open() -> Result<Self, String> {
         let dir = db_dir();
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create db dir: {e}"))?;
@@ -83,6 +103,7 @@ impl Database {
         };
         db.create_schema()?;
         db.migrate_from_json()?;
+        db.migrate_add_video_metadata()?;
         Ok(db)
     }
 
@@ -105,7 +126,9 @@ impl Database {
                 channel_name TEXT,
                 channel_id TEXT,
                 published_date TEXT,
-                stored_at TEXT DEFAULT CURRENT_TIMESTAMP
+                stored_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                duration INTEGER,
+                view_count INTEGER
             );
 
             CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id);
@@ -152,6 +175,21 @@ impl Database {
                 params![name],
             )
             .map_err(|e| format!("Migration mark failed: {e}"))?;
+        Ok(())
+    }
+
+    fn migrate_add_video_metadata(&self) -> Result<(), String> {
+        if self.has_migration("add_video_metadata") {
+            return Ok(());
+        }
+        // Add columns if they don't exist (idempotent for fresh DBs that already have them)
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE videos ADD COLUMN duration INTEGER;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE videos ADD COLUMN view_count INTEGER;");
+        self.mark_migration("add_video_metadata")?;
         Ok(())
     }
 
@@ -459,7 +497,11 @@ impl Database {
                 .map(|d| d.to_rfc3339())
                 .unwrap_or_default();
             let result = self.conn.execute(
-                "INSERT OR IGNORE INTO videos (id, title, url, is_short, channel_name, channel_id, published_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO videos (id, title, url, is_short, channel_name, channel_id, published_date, duration, view_count)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET
+                   duration = COALESCE(excluded.duration, duration),
+                   view_count = COALESCE(excluded.view_count, view_count)",
                 params![
                     v.id,
                     v.title,
@@ -468,6 +510,8 @@ impl Database {
                     v.channel_name,
                     v.channel_id,
                     pub_date,
+                    v.duration,
+                    v.view_count.map(|c| c as i64),
                 ],
             );
             if let Ok(rows) = result {
@@ -479,7 +523,7 @@ impl Database {
 
     pub fn get_stored_videos(&self, channel_id: &str) -> Vec<Video> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at FROM videos WHERE channel_id = ? ORDER BY published_date DESC"
+            "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at, duration, view_count FROM videos WHERE channel_id = ? ORDER BY published_date DESC"
         ).unwrap();
         stmt.query_map(params![channel_id], |row| Ok(hydrate_video(row)))
             .unwrap()
@@ -518,7 +562,7 @@ impl Database {
                 .unwrap_or(0);
 
             let select_sql = format!(
-                "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at FROM videos WHERE channel_id IN ({}) ORDER BY published_date DESC LIMIT ?{} OFFSET ?{}",
+                "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at, duration, view_count FROM videos WHERE channel_id IN ({}) ORDER BY published_date DESC LIMIT ?{} OFFSET ?{}",
                 ph_str,
                 ids.len() + 1,
                 ids.len() + 2,
@@ -547,7 +591,7 @@ impl Database {
                 .unwrap_or(0);
 
             let mut stmt = self.conn.prepare(
-                "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at FROM videos ORDER BY published_date DESC LIMIT ? OFFSET ?"
+                "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at, duration, view_count FROM videos ORDER BY published_date DESC LIMIT ? OFFSET ?"
             ).unwrap();
             let videos: Vec<Video> = stmt
                 .query_map(params![safe_page_size as i64, offset as i64], |row| {
@@ -614,6 +658,30 @@ impl Database {
         .collect()
     }
 
+    pub fn get_channel_stats(&self, hide_shorts: bool) -> HashMap<String, ChannelStats> {
+        let short_filter = if hide_shorts {
+            "WHERE v.is_short = 0"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT v.channel_id, COUNT(*) as cnt, MAX(v.published_date) as latest
+             FROM videos v {}
+             GROUP BY v.channel_id",
+            short_filter
+        );
+        let mut stmt = self.conn.prepare(&sql).unwrap();
+        stmt.query_map([], |row| {
+            let channel_id: String = row.get(0)?;
+            let video_count: usize = row.get(1)?;
+            let latest_date: Option<String> = row.get(2)?;
+            Ok((channel_id, ChannelStats { video_count, latest_date }))
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
     pub fn get_fully_watched_channels(&self, hide_shorts: bool) -> HashSet<String> {
         let short_filter = if hide_shorts {
             "WHERE v.is_short = 0"
@@ -657,6 +725,10 @@ fn hydrate_video(row: &rusqlite::Row) -> Video {
         .map(|d| get_relative_date(d))
         .unwrap_or_default();
 
+    let duration: Option<i64> = row.get(8).unwrap_or(None);
+    let duration_string = Some(format_duration(duration));
+    let view_count: Option<i64> = row.get(9).unwrap_or(None);
+
     Video {
         id: row.get(0).unwrap_or_default(),
         title: row.get(1).unwrap_or_default(),
@@ -667,9 +739,9 @@ fn hydrate_video(row: &rusqlite::Row) -> Video {
         published_date,
         stored_at: row.get(7).unwrap_or(None),
         relative_date,
-        duration: None,
-        duration_string: None,
-        view_count: None,
+        duration,
+        duration_string,
+        view_count: view_count.map(|c| c as u64),
     }
 }
 
@@ -734,4 +806,557 @@ pub fn decode_xml_entities(s: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&apos;", "'")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── format_duration tests ─────────────────────────────────
+
+    #[test]
+    fn test_format_duration_none() {
+        assert_eq!(format_duration(None), "--:--");
+    }
+
+    #[test]
+    fn test_format_duration_zero() {
+        assert_eq!(format_duration(Some(0)), "--:--");
+    }
+
+    #[test]
+    fn test_format_duration_seconds_only() {
+        assert_eq!(format_duration(Some(45)), "0:45");
+    }
+
+    #[test]
+    fn test_format_duration_minutes_and_seconds() {
+        assert_eq!(format_duration(Some(125)), "2:05");
+    }
+
+    #[test]
+    fn test_format_duration_exact_minute() {
+        assert_eq!(format_duration(Some(60)), "1:00");
+    }
+
+    #[test]
+    fn test_format_duration_with_hours() {
+        assert_eq!(format_duration(Some(3661)), "1:01:01");
+    }
+
+    #[test]
+    fn test_format_duration_large() {
+        assert_eq!(format_duration(Some(7200)), "2:00:00");
+    }
+
+    // ── format_views tests ────────────────────────────────────
+
+    #[test]
+    fn test_format_views_none() {
+        assert_eq!(format_views(None), "");
+    }
+
+    #[test]
+    fn test_format_views_small() {
+        assert_eq!(format_views(Some(500)), "500");
+    }
+
+    #[test]
+    fn test_format_views_thousands() {
+        assert_eq!(format_views(Some(1_500)), "1K");
+    }
+
+    #[test]
+    fn test_format_views_exact_thousand() {
+        assert_eq!(format_views(Some(1_000)), "1K");
+    }
+
+    #[test]
+    fn test_format_views_millions() {
+        assert_eq!(format_views(Some(2_500_000)), "2.5M");
+    }
+
+    #[test]
+    fn test_format_views_exact_million() {
+        assert_eq!(format_views(Some(1_000_000)), "1.0M");
+    }
+
+    #[test]
+    fn test_format_views_zero() {
+        assert_eq!(format_views(Some(0)), "0");
+    }
+
+    #[test]
+    fn test_format_views_999() {
+        assert_eq!(format_views(Some(999)), "999");
+    }
+
+    // ── decode_xml_entities tests ─────────────────────────────
+
+    #[test]
+    fn test_decode_xml_entities_amp() {
+        assert_eq!(decode_xml_entities("foo &amp; bar"), "foo & bar");
+    }
+
+    #[test]
+    fn test_decode_xml_entities_lt_gt() {
+        assert_eq!(decode_xml_entities("&lt;b&gt;"), "<b>");
+    }
+
+    #[test]
+    fn test_decode_xml_entities_quotes() {
+        assert_eq!(decode_xml_entities("&quot;hello&quot;"), "\"hello\"");
+    }
+
+    #[test]
+    fn test_decode_xml_entities_apos() {
+        assert_eq!(decode_xml_entities("it&#39;s"), "it's");
+        assert_eq!(decode_xml_entities("it&apos;s"), "it's");
+    }
+
+    #[test]
+    fn test_decode_xml_entities_no_entities() {
+        assert_eq!(decode_xml_entities("plain text"), "plain text");
+    }
+
+    #[test]
+    fn test_decode_xml_entities_multiple() {
+        assert_eq!(
+            decode_xml_entities("&lt;a&gt; &amp; &lt;b&gt;"),
+            "<a> & <b>"
+        );
+    }
+
+    // ── get_relative_date tests ───────────────────────────────
+
+    #[test]
+    fn test_relative_date_minutes() {
+        let date = Utc::now() - chrono::Duration::minutes(5);
+        assert_eq!(get_relative_date(date), "5m ago");
+    }
+
+    #[test]
+    fn test_relative_date_one_minute() {
+        let date = Utc::now() - chrono::Duration::seconds(30);
+        assert_eq!(get_relative_date(date), "1m ago");
+    }
+
+    #[test]
+    fn test_relative_date_hours() {
+        let date = Utc::now() - chrono::Duration::hours(3);
+        assert_eq!(get_relative_date(date), "3h ago");
+    }
+
+    #[test]
+    fn test_relative_date_one_day() {
+        let date = Utc::now() - chrono::Duration::days(1);
+        assert_eq!(get_relative_date(date), "1d ago");
+    }
+
+    #[test]
+    fn test_relative_date_days() {
+        let date = Utc::now() - chrono::Duration::days(5);
+        assert_eq!(get_relative_date(date), "5d ago");
+    }
+
+    #[test]
+    fn test_relative_date_weeks() {
+        let date = Utc::now() - chrono::Duration::days(14);
+        assert_eq!(get_relative_date(date), "2w ago");
+    }
+
+    #[test]
+    fn test_relative_date_months() {
+        let date = Utc::now() - chrono::Duration::days(60);
+        assert_eq!(get_relative_date(date), "2mo ago");
+    }
+
+    #[test]
+    fn test_relative_date_years() {
+        let date = Utc::now() - chrono::Duration::days(400);
+        assert_eq!(get_relative_date(date), "1y ago");
+    }
+
+    #[test]
+    fn test_relative_date_future() {
+        let date = Utc::now() + chrono::Duration::hours(1);
+        assert_eq!(get_relative_date(date), "upcoming");
+    }
+
+    // ── Database CRUD tests ───────────────────────────────────
+
+    fn test_db() -> Database {
+        Database::open_in_memory().expect("Failed to open in-memory db")
+    }
+
+    fn make_sub(id: &str, name: &str) -> Subscription {
+        Subscription {
+            id: id.to_string(),
+            name: name.to_string(),
+            url: format!("https://youtube.com/channel/{}", id),
+            added_at: None,
+        }
+    }
+
+    fn make_video(id: &str, channel_id: &str) -> Video {
+        Video {
+            id: id.to_string(),
+            title: format!("Video {}", id),
+            url: format!("https://youtube.com/watch?v={}", id),
+            is_short: false,
+            channel_name: Some("TestChannel".to_string()),
+            channel_id: Some(channel_id.to_string()),
+            published_date: Some(Utc::now()),
+            stored_at: None,
+            relative_date: "1h ago".to_string(),
+            duration: None,
+            duration_string: None,
+            view_count: None,
+        }
+    }
+
+    #[test]
+    fn test_add_and_get_subscriptions() {
+        let db = test_db();
+        let sub = make_sub("ch1", "Channel One");
+        db.add_subscription(&sub).unwrap();
+
+        let subs = db.get_subscriptions();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].name, "Channel One");
+        assert_eq!(subs[0].id, "ch1");
+    }
+
+    #[test]
+    fn test_add_duplicate_subscription() {
+        let db = test_db();
+        let sub = make_sub("ch1", "Channel One");
+        db.add_subscription(&sub).unwrap();
+        let result = db.add_subscription(&sub);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn test_remove_subscription() {
+        let db = test_db();
+        let sub = make_sub("ch1", "Channel One");
+        db.add_subscription(&sub).unwrap();
+        db.remove_subscription("ch1").unwrap();
+
+        let subs = db.get_subscriptions();
+        assert_eq!(subs.len(), 0);
+    }
+
+    #[test]
+    fn test_remove_nonexistent_subscription() {
+        let db = test_db();
+        let result = db.remove_subscription("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_subscriptions_ordered_case_insensitive() {
+        let db = test_db();
+        db.add_subscription(&make_sub("c1", "Zeta")).unwrap();
+        db.add_subscription(&make_sub("c2", "alpha")).unwrap();
+        db.add_subscription(&make_sub("c3", "Beta")).unwrap();
+
+        let subs = db.get_subscriptions();
+        assert_eq!(subs[0].name, "alpha");
+        assert_eq!(subs[1].name, "Beta");
+        assert_eq!(subs[2].name, "Zeta");
+    }
+
+    #[test]
+    fn test_store_and_get_videos() {
+        let db = test_db();
+        let videos = vec![
+            make_video("v1", "ch1"),
+            make_video("v2", "ch1"),
+            make_video("v3", "ch2"),
+        ];
+        let stored = db.store_videos(&videos);
+        assert_eq!(stored, 3);
+
+        let ch1_videos = db.get_stored_videos("ch1");
+        assert_eq!(ch1_videos.len(), 2);
+
+        let ch2_videos = db.get_stored_videos("ch2");
+        assert_eq!(ch2_videos.len(), 1);
+    }
+
+    #[test]
+    fn test_store_videos_deduplication() {
+        let db = test_db();
+        let videos = vec![make_video("v1", "ch1")];
+        db.store_videos(&videos);
+        let stored = db.store_videos(&videos); // same video again
+        assert_eq!(stored, 1); // upsert touches the row
+    }
+
+    #[test]
+    fn test_store_empty_videos() {
+        let db = test_db();
+        let stored = db.store_videos(&[]);
+        assert_eq!(stored, 0);
+    }
+
+    #[test]
+    fn test_watched_operations() {
+        let db = test_db();
+        let ids = db.get_watched_ids();
+        assert!(ids.is_empty());
+
+        db.mark_as_watched("v1");
+        let ids = db.get_watched_ids();
+        assert!(ids.contains("v1"));
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn test_toggle_watched() {
+        let db = test_db();
+
+        let now_watched = db.toggle_watched("v1");
+        assert!(now_watched);
+        assert!(db.get_watched_ids().contains("v1"));
+
+        let now_watched = db.toggle_watched("v1");
+        assert!(!now_watched);
+        assert!(!db.get_watched_ids().contains("v1"));
+    }
+
+    #[test]
+    fn test_mark_channel_all_watched() {
+        let db = test_db();
+        let ids = vec!["v1".to_string(), "v2".to_string(), "v3".to_string()];
+        let count = db.mark_channel_all_watched(&ids);
+        assert_eq!(count, 3);
+
+        let watched = db.get_watched_ids();
+        assert_eq!(watched.len(), 3);
+
+        // Marking again should add 0
+        let count = db.mark_channel_all_watched(&ids);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_mark_channel_all_watched_empty() {
+        let db = test_db();
+        let count = db.mark_channel_all_watched(&[]);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_settings_defaults() {
+        let db = test_db();
+        let settings = db.get_settings();
+        assert_eq!(settings.player, "mpv");
+        assert_eq!(settings.videos_per_channel, 15);
+        assert!(settings.hide_shorts);
+    }
+
+    #[test]
+    fn test_update_and_get_settings() {
+        let db = test_db();
+        db.update_setting("player", "\"vlc\"");
+        db.update_setting("hideShorts", "false");
+
+        let settings = db.get_settings();
+        assert_eq!(settings.player, "vlc");
+        assert!(!settings.hide_shorts);
+    }
+
+    #[test]
+    fn test_paginated_videos() {
+        let db = test_db();
+        let mut videos = Vec::new();
+        for i in 0..25 {
+            let mut v = make_video(&format!("v{}", i), "ch1");
+            v.published_date = Some(Utc::now() - chrono::Duration::hours(i as i64));
+            videos.push(v);
+        }
+        db.store_videos(&videos);
+
+        let ids = vec!["ch1".to_string()];
+        let page0 = db.get_stored_videos_paginated(Some(&ids), 0, 10);
+        assert_eq!(page0.total, 25);
+        assert_eq!(page0.videos.len(), 10);
+        assert_eq!(page0.page, 0);
+        assert_eq!(page0.page_size, 10);
+
+        let page1 = db.get_stored_videos_paginated(Some(&ids), 1, 10);
+        assert_eq!(page1.videos.len(), 10);
+
+        let page2 = db.get_stored_videos_paginated(Some(&ids), 2, 10);
+        assert_eq!(page2.videos.len(), 5);
+    }
+
+    #[test]
+    fn test_paginated_videos_no_channels() {
+        let db = test_db();
+        let result = db.get_stored_videos_paginated(Some(&[]), 0, 10);
+        assert_eq!(result.total, 0);
+        assert!(result.videos.is_empty());
+    }
+
+    #[test]
+    fn test_paginated_videos_all() {
+        let db = test_db();
+        let videos = vec![make_video("v1", "ch1"), make_video("v2", "ch2")];
+        db.store_videos(&videos);
+
+        let result = db.get_stored_videos_paginated(None, 0, 10);
+        assert_eq!(result.total, 2);
+        assert_eq!(result.videos.len(), 2);
+    }
+
+    #[test]
+    fn test_channel_views() {
+        let db = test_db();
+        db.add_subscription(&make_sub("ch1", "Channel")).unwrap();
+
+        // Store a video with a recent date
+        let mut video = make_video("v1", "ch1");
+        video.published_date = Some(Utc::now());
+        db.store_videos(&[video]);
+
+        // Before viewing, should have new count
+        let counts = db.get_new_video_counts(false);
+        assert!(counts.get("ch1").copied().unwrap_or(0) > 0);
+
+        // After viewing, the count should be 0 (video published before last_viewed)
+        db.update_channel_last_viewed("ch1");
+        let counts = db.get_new_video_counts(false);
+        assert_eq!(counts.get("ch1").copied().unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn test_mark_all_channels_viewed() {
+        let db = test_db();
+        let ids = vec!["ch1".to_string(), "ch2".to_string()];
+        db.mark_all_channels_viewed(&ids);
+
+        // Should not have new counts (no videos exist yet)
+        let counts = db.get_new_video_counts(false);
+        assert!(counts.is_empty());
+    }
+
+    #[test]
+    fn test_fully_watched_channels() {
+        let db = test_db();
+        let videos = vec![make_video("v1", "ch1"), make_video("v2", "ch1")];
+        db.store_videos(&videos);
+
+        // Not watched yet
+        let fully = db.get_fully_watched_channels(false);
+        assert!(!fully.contains("ch1"));
+
+        // Watch all
+        db.mark_as_watched("v1");
+        db.mark_as_watched("v2");
+        let fully = db.get_fully_watched_channels(false);
+        assert!(fully.contains("ch1"));
+    }
+
+    #[test]
+    fn test_fully_watched_channels_with_shorts_hidden() {
+        let db = test_db();
+        let v1 = make_video("v1", "ch1");
+        let mut v2 = make_video("v2", "ch1");
+        v2.is_short = true;
+        db.store_videos(&[v1, v2]);
+
+        // Watch only the non-short
+        db.mark_as_watched("v1");
+        let fully = db.get_fully_watched_channels(true);
+        assert!(fully.contains("ch1"));
+
+        // With shorts shown, not fully watched
+        let fully = db.get_fully_watched_channels(false);
+        assert!(!fully.contains("ch1"));
+    }
+
+    #[test]
+    fn test_hydrate_video_various_date_formats() {
+        let db = test_db();
+        // Store a video via raw SQL with different date format
+        db.conn.execute(
+            "INSERT INTO videos (id, title, url, is_short, channel_name, channel_id, published_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params!["v1", "Test", "https://youtube.com/watch?v=v1", 0, "Ch", "ch1", "2024-01-15T10:30:00+00:00"],
+        ).unwrap();
+
+        let videos = db.get_stored_videos("ch1");
+        assert_eq!(videos.len(), 1);
+        assert!(videos[0].published_date.is_some());
+    }
+
+    #[test]
+    fn test_upsert_metadata() {
+        let db = test_db();
+        let mut v = make_video("v1", "ch1");
+        v.duration = Some(120);
+        v.view_count = Some(5000);
+        db.store_videos(&[v]);
+
+        let videos = db.get_stored_videos("ch1");
+        assert_eq!(videos[0].duration, Some(120));
+        assert_eq!(videos[0].view_count, Some(5000));
+        assert_eq!(videos[0].duration_string.as_deref(), Some("2:00"));
+    }
+
+    #[test]
+    fn test_null_doesnt_clobber_metadata() {
+        let db = test_db();
+        // First store with metadata
+        let mut v = make_video("v1", "ch1");
+        v.duration = Some(300);
+        v.view_count = Some(10000);
+        db.store_videos(&[v]);
+
+        // Re-store same video without metadata (like RSS would)
+        let v2 = make_video("v1", "ch1");
+        assert!(v2.duration.is_none());
+        assert!(v2.view_count.is_none());
+        db.store_videos(&[v2]);
+
+        // Original metadata should be preserved
+        let videos = db.get_stored_videos("ch1");
+        assert_eq!(videos[0].duration, Some(300));
+        assert_eq!(videos[0].view_count, Some(10000));
+    }
+
+    #[test]
+    fn test_get_channel_stats() {
+        let db = test_db();
+        let mut v1 = make_video("v1", "ch1");
+        v1.published_date = Some(Utc::now() - chrono::Duration::days(2));
+        let mut v2 = make_video("v2", "ch1");
+        v2.published_date = Some(Utc::now() - chrono::Duration::days(1));
+        let mut v3 = make_video("v3", "ch2");
+        v3.published_date = Some(Utc::now());
+        db.store_videos(&[v1, v2, v3]);
+
+        let stats = db.get_channel_stats(false);
+        assert_eq!(stats.get("ch1").unwrap().video_count, 2);
+        assert!(stats.get("ch1").unwrap().latest_date.is_some());
+        assert_eq!(stats.get("ch2").unwrap().video_count, 1);
+    }
+
+    #[test]
+    fn test_get_channel_stats_hides_shorts() {
+        let db = test_db();
+        let v1 = make_video("v1", "ch1");
+        let mut v2 = make_video("v2", "ch1");
+        v2.is_short = true;
+        db.store_videos(&[v1, v2]);
+
+        let stats = db.get_channel_stats(true);
+        assert_eq!(stats.get("ch1").unwrap().video_count, 1);
+
+        let stats = db.get_channel_stats(false);
+        assert_eq!(stats.get("ch1").unwrap().video_count, 2);
+    }
 }
