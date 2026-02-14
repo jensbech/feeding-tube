@@ -1,0 +1,30 @@
+[package]
+name = "youtube-cli"
+version = "2.0.1"
+edition = "2021"
+authors = ["Jens Bech-Sørensen"]
+description = "A terminal UI for managing YouTube subscriptions and watching videos"
+
+[[bin]]
+name = "youtube-cli"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+dirs = "5"
+open = "5"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+chrono = "0.4"
+unicode-width = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
