@@ -1,3 +1,4 @@
 target/
+release/
 dist/
 node_modules/
