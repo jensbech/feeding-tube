@@ -12,6 +12,14 @@ A terminal UI for managing YouTube subscriptions and watching videos, built with
 - Paginated "all videos" view
 - SQLite storage with automatic migration
 
+## Quick Install
+
+```bash
+curl -Lo /usr/local/bin/youtube-cli "$(curl -s https://git.bechsor.no/api/v1/repos/jens/youtube-cli/releases/latest | jq -r '.assets[].browser_download_url' | grep "$(uname -m | sed s/arm64/aarch64/)")" && chmod +x /usr/local/bin/youtube-cli
+```
+
+Pre-built binaries for macOS, Linux, and Windows at [releases](https://git.bechsor.no/jens/youtube-cli/releases).
+
 ## Requirements
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
