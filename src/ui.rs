@@ -83,7 +83,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
     let mut spans = vec![
         Span::styled(
-            "youtube-cli",
+            "FeedingTube",
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ),
     ];

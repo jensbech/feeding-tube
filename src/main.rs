@@ -23,7 +23,7 @@ use db::Database;
 // ── CLI Arguments ──────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "youtube-cli", version, about = "A terminal UI for managing YouTube subscriptions")]
+#[command(name = "feeding-tube", version, about = "A terminal UI for managing YouTube subscriptions")]
 struct Cli {
     /// Add a channel URL directly
     #[arg(short, long)]

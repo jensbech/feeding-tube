@@ -1,12 +1,12 @@
 [package]
-name = "youtube-cli"
+name = "feeding-tube"
 version = "2.0.1"
 edition = "2021"
 authors = ["Jens Bech-Sørensen"]
 description = "A terminal UI for managing YouTube subscriptions and watching videos"
 
 [[bin]]
-name = "youtube-cli"
+name = "feeding-tube"
 path = "src/main.rs"
 
 [dependencies]

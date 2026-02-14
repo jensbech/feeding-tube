@@ -1,4 +1,4 @@
-# youtube-cli
+# FeedingTube
 
 A terminal UI for managing YouTube subscriptions and watching videos, built with Rust and [ratatui](https://ratatui.rs/).
 
@@ -15,7 +15,7 @@ A terminal UI for managing YouTube subscriptions and watching videos, built with
 ## Quick Install
 
 ```bash
-curl -fsSL https://git.bechsor.no/jens/youtube-cli/raw/branch/main/install | bash
+curl -fsSL https://git.bechsor.no/jens/feeding-tube/raw/branch/main/install | bash
 ```
 
 ## Requirements
@@ -41,12 +41,12 @@ just release-all # cross-compile for all targets
 ## Usage
 
 ```bash
-youtube-cli              # launch TUI
-youtube-cli -c 1         # open channel 1 directly
-youtube-cli --add <url>  # add channel from CLI
-youtube-cli --prime      # fetch full history for all channels
-youtube-cli --prime <n>  # prime channel by index or name
-youtube-cli --list       # list subscriptions
+feeding-tube              # launch TUI
+feeding-tube -c 1         # open channel 1 directly
+feeding-tube --add <url>  # add channel from CLI
+feeding-tube --prime      # fetch full history for all channels
+feeding-tube --prime <n>  # prime channel by index or name
+feeding-tube --list       # list subscriptions
 ```
 
 ### Keybindings
@@ -96,9 +96,9 @@ youtube-cli --list       # list subscriptions
 
 ## Storage
 
-Data stored in `~/.youtube-cli/data.db` (SQLite via rusqlite).
+Data stored in `~/.feeding-tube/data.db` (SQLite via rusqlite).
 
-Migrates automatically from the legacy `~/.config/youtube-cli/` JSON format on first run.
+Migrates automatically from the legacy `~/.config/feeding-tube/` JSON format on first run.
 
 ## Development
 

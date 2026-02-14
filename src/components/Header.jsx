@@ -9,7 +9,7 @@ export default function Header({ title, subtitle, loading, loadingMessage, hideS
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box>
-        <Text bold color="cyan">youtube-cli</Text>
+        <Text bold color="cyan">FeedingTube</Text>
         {title && <><Text color="gray"> - </Text><Text bold>{title}</Text></>}
         {subtitle && <Text color="gray"> ({subtitle})</Text>}
         {hideShorts !== undefined && (

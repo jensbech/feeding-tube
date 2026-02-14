@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, chmodSy
 import { homedir } from 'os';
 import { join, basename } from 'path';
 
-const DB_DIR = join(homedir(), '.youtube-cli');
+const DB_DIR = join(homedir(), '.feeding-tube');
 const DB_FILE = join(DB_DIR, 'data.db');
 const LEGACY_CONFIG_DIR = join(homedir(), '.config', 'youtube-cli');
 

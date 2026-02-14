@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const TEST_DIR = join(tmpdir(), `youtube-cli-player-test-${Date.now()}`);
+const TEST_DIR = join(tmpdir(), `feeding-tube-player-test-${Date.now()}`);
 const originalHome = process.env.HOME;
 
 function setupTestEnv() {

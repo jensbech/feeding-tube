@@ -67,7 +67,7 @@ pub struct Database {
 
 fn db_dir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
-    home.join(".youtube-cli")
+    home.join(".feeding-tube")
 }
 
 fn db_path() -> PathBuf {
@@ -93,6 +93,15 @@ impl Database {
         let dir = db_dir();
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create db dir: {e}"))?;
         let path = db_path();
+
+        // Migrate from old ~/.youtube-cli/ if new db doesn't exist yet
+        if !path.exists() {
+            let home = dirs::home_dir().unwrap();
+            let old_db = home.join(".youtube-cli").join("data.db");
+            if old_db.exists() {
+                let _ = fs::copy(&old_db, &path);
+            }
+        }
         let conn =
             Connection::open(&path).map_err(|e| format!("Failed to open database: {e}"))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")

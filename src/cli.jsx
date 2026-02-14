@@ -9,11 +9,11 @@ import { getChannelInfo, primeChannel } from './lib/ytdlp.js';
 
 const cli = meow(`
   Usage
-    $ youtube-cli                    Launch the TUI
-    $ youtube-cli --add <url>        Quick-add a channel
-    $ youtube-cli --list             List subscriptions (non-interactive)
-    $ youtube-cli --channel <index>  Start on a specific channel (by index)
-    $ youtube-cli --prime [query]    Prime historical videos (all or specific channel)
+    $ feeding-tube                    Launch the TUI
+    $ feeding-tube --add <url>        Quick-add a channel
+    $ feeding-tube --list             List subscriptions (non-interactive)
+    $ feeding-tube --channel <index>  Start on a specific channel (by index)
+    $ feeding-tube --prime [query]    Prime historical videos (all or specific channel)
 
   Options
     --add, -a       Add a channel URL directly
@@ -24,12 +24,12 @@ const cli = meow(`
     --version       Show version
 
   Examples
-    $ youtube-cli
-    $ youtube-cli --add https://youtube.com/@Fireship
-    $ youtube-cli -c 1
-    $ youtube-cli --prime
-    $ youtube-cli --prime 3
-    $ youtube-cli --prime "fireship"
+    $ feeding-tube
+    $ feeding-tube --add https://youtube.com/@Fireship
+    $ feeding-tube -c 1
+    $ feeding-tube --prime
+    $ feeding-tube --prime 3
+    $ feeding-tube --prime "fireship"
 
   Navigation
     j/k or arrows   Move up/down
