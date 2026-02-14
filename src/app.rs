@@ -52,6 +52,7 @@ pub struct App {
     pub channel_selected: usize,
     pub channel_scroll: usize,
     pub new_counts: HashMap<String, usize>,
+    pub upcoming_counts: HashMap<String, usize>,
     pub channel_stats: HashMap<String, ChannelStats>,
     pub fully_watched: HashSet<String>,
     pub saved_channel_index: usize,
@@ -122,6 +123,7 @@ impl App {
             channel_selected: 0,
             channel_scroll: 0,
             new_counts: HashMap::new(),
+            upcoming_counts: HashMap::new(),
             channel_stats: HashMap::new(),
             fully_watched: HashSet::new(),
             saved_channel_index: 0,
@@ -171,6 +173,7 @@ impl App {
 
     pub fn refresh_counts(&mut self) {
         self.new_counts = self.db.get_new_video_counts(self.hide_shorts);
+        self.upcoming_counts = self.db.get_upcoming_video_counts(self.hide_shorts);
         self.channel_stats = self.db.get_channel_stats(self.hide_shorts);
         self.fully_watched = self.db.get_fully_watched_channels(self.hide_shorts);
     }

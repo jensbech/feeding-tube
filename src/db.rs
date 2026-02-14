@@ -647,16 +647,46 @@ impl Database {
         } else {
             ""
         };
+        let now = Utc::now().to_rfc3339();
         let sql = format!(
             "SELECT v.channel_id, COUNT(*) as count FROM videos v
              LEFT JOIN channel_views cv ON v.channel_id = cv.channel_id
              WHERE v.published_date IS NOT NULL AND v.channel_id IS NOT NULL {}
                AND (cv.last_viewed_at IS NULL OR v.published_date > cv.last_viewed_at)
+               AND v.published_date <= ?
              GROUP BY v.channel_id",
             short_filter
         );
         let mut stmt = self.conn.prepare(&sql).unwrap();
-        stmt.query_map([], |row| {
+        stmt.query_map(params![now], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, usize>(1)?,
+            ))
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    pub fn get_upcoming_video_counts(&self, hide_shorts: bool) -> HashMap<String, usize> {
+        let short_filter = if hide_shorts {
+            "AND v.is_short = 0"
+        } else {
+            ""
+        };
+        let now = Utc::now().to_rfc3339();
+        let sql = format!(
+            "SELECT v.channel_id, COUNT(*) as count FROM videos v
+             LEFT JOIN watched w ON v.id = w.video_id
+             WHERE v.published_date IS NOT NULL AND v.channel_id IS NOT NULL {}
+               AND v.published_date > ?
+               AND w.video_id IS NULL
+             GROUP BY v.channel_id",
+            short_filter
+        );
+        let mut stmt = self.conn.prepare(&sql).unwrap();
+        stmt.query_map(params![now], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, usize>(1)?,

@@ -306,6 +306,7 @@ fn draw_channel_list(f: &mut Frame, app: &App, area: Rect) {
         .map(|(i, sub)| {
             let is_selected = i == selected;
             let new_count = app.new_counts.get(&sub.id).copied().unwrap_or(0);
+            let upcoming_count = app.upcoming_counts.get(&sub.id).copied().unwrap_or(0);
             let is_fully_watched = app.fully_watched.contains(&sub.id);
 
             let pointer = if is_selected { "▶" } else { " " };
@@ -314,13 +315,15 @@ fn draw_channel_list(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
             } else if new_count > 0 {
                 Style::default().fg(GREEN)
+            } else if upcoming_count > 0 {
+                Style::default().fg(CYAN)
             } else if is_fully_watched {
                 Style::default().fg(DIM_FG)
             } else {
                 Style::default().fg(LIGHT_GRAY)
             };
 
-            // Build name cell with (+N) suffix when there are new videos
+            // Build name cell with (+N) and/or (^N) suffix
             let new_suffix = if new_count > 999 {
                 " (+999)".to_string()
             } else if new_count > 0 {
@@ -328,17 +331,35 @@ fn draw_channel_list(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 String::new()
             };
-            let suffix_width = new_suffix.len();
-            let available_name = name_col.saturating_sub(suffix_width);
+            let upcoming_suffix = if upcoming_count > 999 {
+                " (^999)".to_string()
+            } else if upcoming_count > 0 {
+                format!(" (^{})", upcoming_count)
+            } else {
+                String::new()
+            };
+            let combined_suffix_len = new_suffix.len() + upcoming_suffix.len();
+            let available_name = name_col.saturating_sub(combined_suffix_len);
             let name_display = truncate_str(&sub.name, available_name.saturating_sub(1));
-            let name_cell = if new_count > 0 {
-                ratatui::widgets::Cell::from(Line::from(vec![
-                    Span::styled(name_display.clone(), name_style),
-                    Span::styled(
-                        pad_str(&new_suffix, name_col.saturating_sub(name_display.len())),
-                        Style::default().fg(GREEN),
-                    ),
-                ]))
+            let name_cell = if new_count > 0 || upcoming_count > 0 {
+                let mut spans = vec![Span::styled(name_display.clone(), name_style)];
+                if new_count > 0 {
+                    spans.push(Span::styled(new_suffix.clone(), Style::default().fg(GREEN)));
+                }
+                if upcoming_count > 0 {
+                    let remaining = name_col.saturating_sub(name_display.len() + new_suffix.len());
+                    spans.push(Span::styled(
+                        pad_str(&upcoming_suffix, remaining),
+                        Style::default().fg(CYAN),
+                    ));
+                } else {
+                    let remaining = name_col.saturating_sub(name_display.len() + new_suffix.len());
+                    spans.push(Span::styled(
+                        " ".repeat(remaining),
+                        Style::default(),
+                    ));
+                }
+                ratatui::widgets::Cell::from(Line::from(spans))
             } else {
                 ratatui::widgets::Cell::from(Span::styled(
                     pad_str(&name_display, name_col),
@@ -612,9 +633,16 @@ fn draw_video_table(
 
             // Date
             let date_display = &video.relative_date;
+            let date_color = if is_selected {
+                CYAN
+            } else if video.relative_date == "upcoming" {
+                CYAN
+            } else {
+                GRAY
+            };
             cells.push(ratatui::widgets::Cell::from(Span::styled(
                 pad_str(date_display, date_col),
-                Style::default().fg(if is_selected { CYAN } else { GRAY }),
+                Style::default().fg(date_color),
             )));
 
             let bg = if is_selected {

@@ -66,7 +66,7 @@ async fn handle_add(url: &str) {
                     if input.trim().to_lowercase() != "n" {
                         println!();
                         let existing = db.get_stored_videos(&info.id);
-                        let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
+                        let existing_ids: HashSet<String> = existing.iter().filter(|v| v.duration.is_some()).map(|v| v.id.clone()).collect();
                         let name = info.name.clone();
                         match ytdlp::prime_channel(
                             &info.id, &info.name, &info.url, &existing_ids, |_| {},
@@ -153,12 +153,12 @@ async fn handle_prime(query: Option<String>) {
     let total_channels = channels_to_prime.len();
     println!("Priming {} channel(s) with full history...\n", total_channels);
 
-    // Gather existing IDs and channel data up front
+    // Gather existing IDs and channel data up front (only skip videos that already have duration)
     let channel_data: Vec<(String, String, String, HashSet<String>)> = channels_to_prime
         .iter()
         .map(|ch| {
             let existing = db.get_stored_videos(&ch.id);
-            let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
+            let existing_ids: HashSet<String> = existing.iter().filter(|v| v.duration.is_some()).map(|v| v.id.clone()).collect();
             (ch.id.clone(), ch.name.clone(), ch.url.clone(), existing_ids)
         })
         .collect();
@@ -542,12 +542,13 @@ async fn handle_channel_keys(
         KeyCode::Char('w') => {
             if filtered_len > 0 {
                 let filtered = app.filtered_subscriptions();
-                let is_all_watched = filtered
-                    .get(app.channel_selected)
-                    .map(|s| app.fully_watched.contains(&s.id))
-                    .unwrap_or(true);
-                if !is_all_watched {
-                    app.mode = Mode::ConfirmChannelWatched;
+                if let Some(s) = filtered.get(app.channel_selected) {
+                    let is_all_watched = app.fully_watched.contains(&s.id);
+                    let has_new = app.new_counts.get(&s.id).copied().unwrap_or(0) > 0;
+                    let has_upcoming = app.upcoming_counts.get(&s.id).copied().unwrap_or(0) > 0;
+                    if !is_all_watched || has_new || has_upcoming {
+                        app.mode = Mode::ConfirmChannelWatched;
+                    }
                 }
             }
         }
@@ -808,7 +809,7 @@ async fn handle_prime_channel(
         terminal.draw(|f| ui::draw(f, app)).ok();
 
         let existing = app.db.get_stored_videos(&channel.id);
-        let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
+        let existing_ids: HashSet<String> = existing.iter().filter(|v| v.duration.is_some()).map(|v| v.id.clone()).collect();
 
         let name = channel.name.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ytdlp::PrimeProgress>();
@@ -893,12 +894,12 @@ async fn handle_prime_all(
     app.loading_message = format!("Priming 0/{}", total_channels);
     terminal.draw(|f| ui::draw(f, app)).ok();
 
-    // Gather existing IDs per channel up front
+    // Gather existing IDs per channel up front (only skip videos that already have duration)
     let channel_data: Vec<(String, String, String, HashSet<String>)> = subs
         .iter()
         .map(|ch| {
             let existing = app.db.get_stored_videos(&ch.id);
-            let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
+            let existing_ids: HashSet<String> = existing.iter().filter(|v| v.duration.is_some()).map(|v| v.id.clone()).collect();
             (ch.id.clone(), ch.name.clone(), ch.url.clone(), existing_ids)
         })
         .collect();
@@ -1173,6 +1174,7 @@ fn handle_subscribe_from_search(app: &mut App) {
                 };
                 match app.db.add_subscription(&sub) {
                     Ok(()) => {
+                        app.load_subscriptions();
                         app.set_message(&format!("Added: {}", sub.name));
                     }
                     Err(e) => {
