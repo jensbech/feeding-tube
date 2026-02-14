@@ -146,7 +146,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // Loading indicator
-    if app.loading {
+    if app.loading || !app.loading_message.is_empty() {
         spans.push(Span::styled(" │ ", Style::default().fg(DARK_GRAY)));
         spans.push(Span::styled("⟳ ", Style::default().fg(CYAN)));
         if !app.loading_message.is_empty() {
@@ -402,6 +402,8 @@ fn draw_channel_list(f: &mut Frame, app: &App, area: Rect) {
             .position(scroll);
         f.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
                 .thumb_style(Style::default().fg(ACCENT))
                 .track_style(Style::default().fg(DARK_GRAY)),
             content_area,
@@ -638,6 +640,8 @@ fn draw_video_table(
             .position(scroll);
         f.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
                 .thumb_style(Style::default().fg(ACCENT))
                 .track_style(Style::default().fg(DARK_GRAY)),
             content_area,

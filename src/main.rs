@@ -65,7 +65,20 @@ async fn handle_add(url: &str) {
                     io::stdin().read_line(&mut input).unwrap();
                     if input.trim().to_lowercase() != "n" {
                         println!();
-                        prime_with_progress(&db, &info.id, &info.name, &info.url).await;
+                        let existing = db.get_stored_videos(&info.id);
+                        let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
+                        let name = info.name.clone();
+                        match ytdlp::prime_channel(
+                            &info.id, &info.name, &info.url, &existing_ids, |_| {},
+                        ).await {
+                            Ok(result) => {
+                                if !result.videos.is_empty() {
+                                    db.store_videos(&result.videos);
+                                }
+                                println!("{}: {} new videos ({} total)", name, result.added, result.total);
+                            }
+                            Err(e) => println!("{}: failed - {}", name, e),
+                        }
                     }
                 }
                 Err(e) => {
@@ -137,54 +150,67 @@ async fn handle_prime(query: Option<String>) {
         _ => subs.iter().collect(),
     };
 
-    println!(
-        "Priming {} channel(s) with full history...",
-        channels_to_prime.len()
-    );
-    println!("This may take a while.\n");
+    let total_channels = channels_to_prime.len();
+    println!("Priming {} channel(s) with full history...\n", total_channels);
 
-    for channel in channels_to_prime {
-        prime_with_progress(&db, &channel.id, &channel.name, &channel.url).await;
+    // Gather existing IDs and channel data up front
+    let channel_data: Vec<(String, String, String, HashSet<String>)> = channels_to_prime
+        .iter()
+        .map(|ch| {
+            let existing = db.get_stored_videos(&ch.id);
+            let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
+            (ch.id.clone(), ch.name.clone(), ch.url.clone(), existing_ids)
+        })
+        .collect();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, Result<ytdlp::PrimeResult, String>)>();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
+
+    for (ch_id, ch_name, ch_url, existing_ids) in channel_data {
+        let tx = tx.clone();
+        let sem = semaphore.clone();
+        let name = ch_name.clone();
+        tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let result = ytdlp::prime_channel(
+                &ch_id,
+                &ch_name,
+                &ch_url,
+                &existing_ids,
+                |_| {},
+            )
+            .await;
+            let _ = tx.send((name, result));
+        });
     }
-    println!("\nDone!");
-}
+    drop(tx);
 
-async fn prime_with_progress(db: &Database, id: &str, name: &str, url: &str) {
-    use io::Write;
+    let mut completed = 0usize;
+    let mut total_added = 0usize;
+    let mut failures = 0usize;
 
-    print!("{}: fetching...", name);
-    io::stdout().flush().unwrap();
-
-    let existing = db.get_stored_videos(id);
-    let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
-
-    let name_clone = name.to_string();
-    match ytdlp::prime_channel(
-        id,
-        name,
-        url,
-        &existing_ids,
-        move |done, total| {
-            print!("\r\x1B[K{}: {}/{} videos", name_clone, done, total);
-            io::stdout().flush().unwrap_or(());
-        },
-    )
-    .await
-    {
-        Ok(result) => {
-            // Store the primed videos in the database
-            if !result.videos.is_empty() {
-                db.store_videos(&result.videos);
+    while let Some((name, result)) = rx.recv().await {
+        completed += 1;
+        match result {
+            Ok(r) => {
+                if !r.videos.is_empty() {
+                    db.store_videos(&r.videos);
+                }
+                println!(
+                    "[{}/{}] {}: {} new videos ({} total, {} cached)",
+                    completed, total_channels, name, r.added, r.total, r.skipped
+                );
+                total_added += r.added;
             }
-            println!(
-                "\r\x1B[K{}: added {} videos",
-                name, result.added
-            );
-        }
-        Err(e) => {
-            println!("\r\x1B[K{}: failed - {}", name, e);
+            Err(e) => {
+                println!("[{}/{}] {}: failed - {}", completed, total_channels, name, e);
+                failures += 1;
+            }
         }
     }
+
+    let fail_info = if failures > 0 { format!(", {} failed", failures) } else { String::new() };
+    println!("\nDone! {} videos added{}", total_added, fail_info);
 }
 
 // ── TUI Event Loop ─────────────────────────────────────────
@@ -207,13 +233,10 @@ async fn run_tui(initial_channel: Option<db::Subscription>) -> Result<(), Box<dy
     // Initial load
     app.load_subscriptions();
 
-    // First refresh for channels screen
+    // Background refresh for channels screen
+    let mut bg_refresh: Option<tokio::task::JoinHandle<Vec<db::Video>>> = None;
     if app.screen == Screen::Channels && !app.subscriptions.is_empty() {
-        app.loading = true;
         app.loading_message = "Checking for new videos...".to_string();
-
-        // Render loading state
-        terminal.draw(|f| ui::draw(f, &app))?;
 
         let sub_pairs: Vec<(String, String)> = app
             .subscriptions
@@ -221,12 +244,9 @@ async fn run_tui(initial_channel: Option<db::Subscription>) -> Result<(), Box<dy
             .map(|s| (s.id.clone(), s.name.clone()))
             .collect();
 
-        let fresh = ytdlp::refresh_all_videos(&sub_pairs).await;
-        app.db.store_videos(&fresh);
-        app.refresh_counts();
-        app.has_checked_for_new = true;
-        app.loading = false;
-        app.loading_message.clear();
+        bg_refresh = Some(tokio::spawn(async move {
+            ytdlp::refresh_all_videos(&sub_pairs).await
+        }));
     }
 
     // If starting on videos screen, load videos
@@ -236,6 +256,20 @@ async fn run_tui(initial_channel: Option<db::Subscription>) -> Result<(), Box<dy
 
     // Main event loop
     loop {
+        // Check if background refresh completed
+        if let Some(ref handle) = bg_refresh {
+            if handle.is_finished() {
+                if let Some(handle) = bg_refresh.take() {
+                    if let Ok(fresh) = handle.await {
+                        app.db.store_videos(&fresh);
+                        app.refresh_counts();
+                        app.has_checked_for_new = true;
+                    }
+                    app.loading_message.clear();
+                }
+            }
+        }
+
         app.clear_expired_messages();
         terminal.draw(|f| ui::draw(f, &app))?;
 
@@ -770,14 +804,14 @@ async fn handle_prime_channel(
 ) {
     if let Some(ref channel) = app.pending_channel.clone() {
         app.loading = true;
-        app.loading_message = format!("Priming {}: 0/?", channel.name);
+        app.loading_message = format!("Priming {}...", channel.name);
         terminal.draw(|f| ui::draw(f, app)).ok();
 
         let existing = app.db.get_stored_videos(&channel.id);
         let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
 
         let name = channel.name.clone();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, usize)>();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ytdlp::PrimeProgress>();
 
         let ch_id = channel.id.clone();
         let ch_name = channel.name.clone();
@@ -789,8 +823,8 @@ async fn handle_prime_channel(
                 &ch_name,
                 &ch_url,
                 &existing_ids,
-                move |done, total| {
-                    let _ = tx.send((done, total));
+                move |p| {
+                    let _ = tx.send(p);
                 },
             )
             .await
@@ -798,8 +832,11 @@ async fn handle_prime_channel(
 
         // Poll for progress
         loop {
-            while let Ok((done, total)) = rx.try_recv() {
-                app.loading_message = format!("Priming {}: {}/{}", name, done, total);
+            while let Ok(p) = rx.try_recv() {
+                app.loading_message = format!(
+                    "Priming {}: scanned {} | {} new",
+                    name, p.scanned, p.new
+                );
             }
             terminal.draw(|f| ui::draw(f, app)).ok();
 
@@ -811,7 +848,6 @@ async fn handle_prime_channel(
 
         match handle.await {
             Ok(Ok(result)) => {
-                // Store the primed videos in the database
                 if !result.videos.is_empty() {
                     app.db.store_videos(&result.videos);
                 }
@@ -821,7 +857,7 @@ async fn handle_prime_channel(
                     String::new()
                 };
                 app.set_message(&format!(
-                    "Primed {}: {} videos added{}",
+                    "Primed {}: {} new videos added{}",
                     name, result.added, skipped_info
                 ));
                 app.refresh_counts();
@@ -854,47 +890,77 @@ async fn handle_prime_all(
     let subs: Vec<db::Subscription> = app.subscriptions.clone();
     let total_channels = subs.len();
 
+    app.loading_message = format!("Priming 0/{}", total_channels);
+    terminal.draw(|f| ui::draw(f, app)).ok();
+
+    // Gather existing IDs per channel up front
+    let channel_data: Vec<(String, String, String, HashSet<String>)> = subs
+        .iter()
+        .map(|ch| {
+            let existing = app.db.get_stored_videos(&ch.id);
+            let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
+            (ch.id.clone(), ch.name.clone(), ch.url.clone(), existing_ids)
+        })
+        .collect();
+
+    // Channel for completed results
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<ytdlp::PrimeResult, String>>();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
+
+    for (ch_id, ch_name, ch_url, existing_ids) in channel_data {
+        let tx = tx.clone();
+        let sem = semaphore.clone();
+        tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let result = ytdlp::prime_channel(
+                &ch_id,
+                &ch_name,
+                &ch_url,
+                &existing_ids,
+                |_| {},
+            )
+            .await;
+            let _ = tx.send(result);
+        });
+    }
+    drop(tx);
+
+    let mut completed = 0usize;
     let mut total_added = 0usize;
     let mut total_skipped = 0usize;
     let mut failures = 0usize;
 
-    for (i, channel) in subs.iter().enumerate() {
-        app.loading_message = format!(
-            "Priming {}/{}: {}",
-            i + 1,
-            total_channels,
-            channel.name
-        );
-        terminal.draw(|f| ui::draw(f, app)).ok();
-
-        let existing = app.db.get_stored_videos(&channel.id);
-        let existing_ids: HashSet<String> = existing.iter().map(|v| v.id.clone()).collect();
-
-        let ch_name = channel.name.clone();
-        let ch_i = i;
-        match ytdlp::prime_channel(
-            &channel.id,
-            &channel.name,
-            &channel.url,
-            &existing_ids,
-            move |done, total| {
-                // Progress is tracked at the channel level
-                let _ = (ch_i, ch_name.clone(), done, total);
-            },
-        )
-        .await
-        {
-            Ok(result) => {
-                if !result.videos.is_empty() {
-                    app.db.store_videos(&result.videos);
+    loop {
+        // Drain all available results
+        let mut got_any = true;
+        while got_any {
+            match rx.try_recv() {
+                Ok(Ok(result)) => {
+                    completed += 1;
+                    if !result.videos.is_empty() {
+                        app.db.store_videos(&result.videos);
+                    }
+                    total_added += result.added;
+                    total_skipped += result.skipped;
+                    app.loading_message = format!("Priming {}/{}", completed, total_channels);
                 }
-                total_added += result.added;
-                total_skipped += result.skipped;
-            }
-            Err(_) => {
-                failures += 1;
+                Ok(Err(_)) => {
+                    completed += 1;
+                    failures += 1;
+                    app.loading_message = format!("Priming {}/{}", completed, total_channels);
+                }
+                Err(_) => {
+                    got_any = false;
+                }
             }
         }
+
+        terminal.draw(|f| ui::draw(f, app)).ok();
+
+        if completed >= total_channels {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     app.loading = false;

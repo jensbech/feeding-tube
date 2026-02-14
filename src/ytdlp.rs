@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use regex::Regex;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -22,6 +23,13 @@ pub struct PrimeResult {
     pub skipped: usize,
     pub failed: usize,
     pub videos: Vec<Video>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrimeProgress {
+    pub scanned: usize,
+    pub new: usize,
+    pub skipped: usize,
 }
 
 // ── Validation ─────────────────────────────────────────────
@@ -486,80 +494,65 @@ async fn fetch_with_retry(
     Err(last_error)
 }
 
-async fn fetch_video_batch(
-    video_ids: &[String],
+fn parse_flat_playlist_video(
+    data: &serde_json::Value,
     channel_id: &str,
     channel_name: &str,
-) -> Vec<Video> {
-    let urls: Vec<String> = video_ids
-        .iter()
-        .map(|id| format!("https://www.youtube.com/watch?v={}", id))
-        .collect();
-
-    let mut args: Vec<&str> = vec![
-        "--dump-json",
-        "--no-warnings",
-        "--extractor-args",
-        "youtube:skip=dash,hls",
-        "--socket-timeout",
-        "30",
-    ];
-    for url in &urls {
-        args.push(url);
+) -> Option<Video> {
+    let id = data["id"].as_str().unwrap_or("").to_string();
+    if id.is_empty() {
+        return None;
     }
+    let title = data["title"].as_str().unwrap_or("").to_string();
 
-    let stdout = match fetch_with_retry(&args, 2, 1000).await {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+    let upload_date = data["upload_date"]
+        .as_str()
+        .and_then(|s| parse_date_yyyymmdd(s))
+        .or_else(|| {
+            data["release_timestamp"]
+                .as_i64()
+                .or(data["timestamp"].as_i64())
+                .and_then(|ts| DateTime::from_timestamp(ts, 0))
+        });
 
-    let mut videos = Vec::new();
-    for line in stdout.lines().filter(|l| !l.is_empty()) {
-        if let Ok(data) = serde_json::from_str::<serde_json::Value>(line) {
-            let upload_date = data["upload_date"]
-                .as_str()
-                .and_then(|s| parse_date_yyyymmdd(s));
-            let duration = data["duration"].as_i64();
-            let is_short = duration.map(|d| d <= 60).unwrap_or(false)
-                || data["webpage_url"]
-                    .as_str()
-                    .map(|u| u.contains("/shorts/"))
-                    .unwrap_or(false);
-            let relative_date = upload_date
-                .map(|d| get_relative_date(d))
-                .unwrap_or_default();
+    let duration = data["duration"].as_i64().or(data["duration"].as_f64().map(|f| f as i64));
+    let is_short = duration.map(|d| d <= 60).unwrap_or(false)
+        || data["webpage_url"]
+            .as_str()
+            .or(data["url"].as_str())
+            .map(|u| u.contains("/shorts/"))
+            .unwrap_or(false);
 
-            let duration_string = data["duration_string"]
-                .as_str()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format_duration(duration));
-            let view_count = data["view_count"].as_u64();
+    let relative_date = upload_date
+        .map(|d| get_relative_date(d))
+        .unwrap_or_default();
 
-            videos.push(Video {
-                id: data["id"].as_str().unwrap_or("").to_string(),
-                title: data["title"].as_str().unwrap_or("").to_string(),
-                url: data["webpage_url"]
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| {
-                        format!(
-                            "https://www.youtube.com/watch?v={}",
-                            data["id"].as_str().unwrap_or("")
-                        )
-                    }),
-                is_short,
-                channel_name: Some(channel_name.to_string()),
-                channel_id: Some(channel_id.to_string()),
-                published_date: upload_date,
-                stored_at: None,
-                relative_date,
-                duration,
-                duration_string: Some(duration_string),
-                view_count,
-            });
-        }
-    }
-    videos
+    let duration_string = data["duration_string"]
+        .as_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format_duration(duration));
+    let view_count = data["view_count"].as_u64();
+
+    Some(Video {
+        id: id.clone(),
+        title,
+        url: data["webpage_url"]
+            .as_str()
+            .or(data["url"].as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                format!("https://www.youtube.com/watch?v={}", id)
+            }),
+        is_short,
+        channel_name: Some(channel_name.to_string()),
+        channel_id: Some(channel_id.to_string()),
+        published_date: upload_date,
+        stored_at: None,
+        relative_date,
+        duration,
+        duration_string: Some(duration_string),
+        view_count,
+    })
 }
 
 pub async fn prime_channel<F>(
@@ -570,117 +563,74 @@ pub async fn prime_channel<F>(
     on_progress: F,
 ) -> Result<PrimeResult, String>
 where
-    F: Fn(usize, usize) + Send + Sync + 'static,
+    F: Fn(PrimeProgress) + Send + Sync + 'static,
 {
     let mut url = channel_url.to_string();
     if !url.contains("/videos") {
         url = url.trim_end_matches('/').to_string() + "/videos";
     }
 
-    let list_out = fetch_with_retry(
-        &[
+    // Stream yt-dlp output line-by-line for real-time progress
+    let mut child = Command::new("yt-dlp")
+        .args([
             "--flat-playlist",
-            "--print",
-            "%(id)s",
+            "--dump-json",
             "--no-warnings",
             "--extractor-args",
             "youtube:skip=dash,hls",
             "--playlist-end",
             "5000",
             &url,
-        ],
-        3,
-        2000,
-    )
-    .await
-    .map_err(|e| format!("Failed to list videos: {e}"))?;
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
 
-    let video_ids: Vec<String> = list_out
-        .trim()
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| l.to_string())
-        .collect();
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let mut reader = BufReader::new(stdout).lines();
 
-    let total = video_ids.len();
-    let new_video_ids: Vec<String> = video_ids
-        .into_iter()
-        .filter(|id| !existing_ids.contains(id))
-        .collect();
+    let mut scanned = 0usize;
+    let mut skipped = 0usize;
+    let mut all_videos: Vec<Video> = Vec::new();
 
-    on_progress(0, new_video_ids.len());
+    on_progress(PrimeProgress { scanned: 0, new: 0, skipped: 0 });
 
-    if new_video_ids.is_empty() {
-        return Ok(PrimeResult {
-            added: 0,
-            total,
-            skipped: existing_ids.len(),
-            failed: 0,
-            videos: Vec::new(),
+    while let Some(line) = reader.next_line().await.map_err(|e| format!("Read error: {e}"))? {
+        if line.is_empty() {
+            continue;
+        }
+        let data: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        scanned += 1;
+        let id = data["id"].as_str().unwrap_or("");
+
+        if id.is_empty() || existing_ids.contains(id) {
+            skipped += 1;
+        } else if let Some(video) = parse_flat_playlist_video(&data, channel_id, channel_name) {
+            all_videos.push(video);
+        }
+
+        on_progress(PrimeProgress {
+            scanned,
+            new: all_videos.len(),
+            skipped,
         });
     }
 
-    let batch_size = 5;
-    let concurrency = 50;
-    let batches: Vec<Vec<String>> = new_video_ids
-        .chunks(batch_size)
-        .map(|c| c.to_vec())
-        .collect();
-
-    let mut added = 0usize;
-    let mut failed = 0usize;
-    let mut all_videos: Vec<Video> = Vec::new();
-
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
-    let progress_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let new_total = new_video_ids.len();
-    let ch_id = channel_id.to_string();
-    let ch_name = channel_name.to_string();
-
-    let on_progress = std::sync::Arc::new(on_progress);
-
-    let mut handles = Vec::new();
-    for batch in batches {
-        let sem = semaphore.clone();
-        let counter = progress_counter.clone();
-        let cid = ch_id.clone();
-        let cname = ch_name.clone();
-        let prog = on_progress.clone();
-        let batch_len = batch.len();
-
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
-            let videos = fetch_video_batch(&batch, &cid, &cname).await;
-            let processed = counter.fetch_add(batch_len, std::sync::atomic::Ordering::Relaxed)
-                + batch_len;
-            prog(processed.min(new_total), new_total);
-            videos
-        }));
+    let status = child.wait().await.map_err(|e| format!("Process error: {e}"))?;
+    if !status.success() && scanned == 0 {
+        return Err("yt-dlp failed to fetch videos".to_string());
     }
-
-    for handle in handles {
-        match handle.await {
-            Ok(videos) => {
-                if videos.is_empty() {
-                    failed += batch_size;
-                } else {
-                    added += videos.len();
-                    all_videos.extend(videos);
-                }
-            }
-            Err(_) => {
-                failed += batch_size;
-            }
-        }
-    }
-
-    on_progress(new_total, new_total);
 
     Ok(PrimeResult {
-        added,
-        total,
-        skipped: existing_ids.len(),
-        failed,
+        added: all_videos.len(),
+        total: scanned,
+        skipped,
+        failed: 0,
         videos: all_videos,
     })
 }
