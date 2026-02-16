@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" width="240" height="160">
+  <!-- Terminal window -->
+  <rect x="10" y="10" width="220" height="140" rx="8" ry="8" fill="#1e1e2e" stroke="#585868" stroke-width="2"/>
+  <!-- Title bar -->
+  <rect x="10" y="10" width="220" height="24" rx="8" ry="8" fill="#313144"/>
+  <rect x="10" y="26" width="220" height="8" fill="#313144"/>
+  <!-- Window buttons -->
+  <circle cx="28" cy="22" r="5" fill="#f38ba8"/>
+  <circle cx="44" cy="22" r="5" fill="#f9e2af"/>
+  <circle cx="60" cy="22" r="5" fill="#a6e3a1"/>
+  <!-- Video player area -->
+  <rect x="30" y="48" width="180" height="86" rx="4" ry="4" fill="#11111b"/>
+  <!-- Play button triangle -->
+  <polygon points="105,72 105,112 138,92" fill="#ff4444" opacity="0.9"/>
+  <!-- Feed lines on left side (subscription feed) -->
+  <rect x="36" y="54" width="40" height="3" rx="1" fill="#585868" opacity="0.5"/>
+  <rect x="36" y="62" width="32" height="3" rx="1" fill="#585868" opacity="0.5"/>
+  <rect x="36" y="70" width="36" height="3" rx="1" fill="#585868" opacity="0.5"/>
+</svg>

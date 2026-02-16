@@ -1,6 +1,10 @@
-# FeedingTube
+<p align="center">
+  <img src="logo.svg" alt="FeedingTube" width="200" />
+</p>
 
-A terminal UI for managing YouTube subscriptions and watching videos, built with Rust and [ratatui](https://ratatui.rs/).
+<h1 align="center">FeedingTube</h1>
+
+<p align="center">A terminal UI for managing YouTube subscriptions and watching videos, built with Rust and <a href="https://ratatui.rs/">ratatui</a>.</p>
 
 ## Install
 
