@@ -2,6 +2,12 @@
 
 A terminal UI for managing YouTube subscriptions and watching videos, built with Rust and [ratatui](https://ratatui.rs/).
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jensbech/feeding-tube/main/install | bash
+```
+
 ![screenshot](src/images/screenshot.png)
 
 ## Requirements
