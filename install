@@ -1,8 +1,7 @@
 #!/bin/bash
 set -e
 
-FORGEJO_URL="https://git.bechsor.no"
-REPO="jens/feeding-tube"
+GITHUB_REPO="jensbech/feeding-tube"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 echo "Installing feeding-tube..."
@@ -36,9 +35,9 @@ echo "Detected platform: $TARGET"
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
-# Get latest release info from Forgejo API
+# Get latest release info from GitHub API
 echo "Fetching latest release..."
-API_URL="$FORGEJO_URL/api/v1/repos/$REPO/releases/latest"
+API_URL="https://api.github.com/repos/$GITHUB_REPO/releases/latest"
 RELEASE_JSON=$(curl -fsSL "$API_URL")
 
 # Extract version
