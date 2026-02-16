@@ -4,7 +4,7 @@
 
 <h1 align="center">FeedingTube</h1>
 
-<p align="center">A terminal UI for managing YouTube subscriptions and watching videos, built with Rust and <a href="https://ratatui.rs/">ratatui</a>.</p>
+<p align="center">A terminal UI for managing YouTube subscriptions and watching videos.
 
 ## Install
 
@@ -22,12 +22,6 @@ curl -fsSL https://raw.githubusercontent.com/jensbech/feeding-tube/main/install 
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [mpv](https://mpv.io/) (or iina/vlc)
-
-## Install
-
-```bash
-cargo install --path .
-```
 
 ## Usage
 
