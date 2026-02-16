@@ -41,7 +41,7 @@ API_URL="https://api.github.com/repos/$GITHUB_REPO/releases/latest"
 RELEASE_JSON=$(curl -fsSL "$API_URL")
 
 # Extract version
-VERSION=$(echo "$RELEASE_JSON" | grep -o '"tag_name":"[^"]*' | cut -d'"' -f4)
+VERSION=$(echo "$RELEASE_JSON" | grep -o '"tag_name": *"[^"]*' | cut -d'"' -f4)
 if [ -z "$VERSION" ]; then
     echo "Could not find latest release"
     exit 1
@@ -50,12 +50,12 @@ fi
 echo "Found version: $VERSION"
 
 # Find the binary download URL for this platform
-DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\":\"[^\"]*${TARGET}[^\"]*" | cut -d'"' -f4 | head -1)
+DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\": *\"[^\"]*${TARGET}[^\"]*" | cut -d'"' -f4 | head -1)
 
 if [ -z "$DOWNLOAD_URL" ]; then
     echo "Could not find binary for $TARGET"
     echo "Available downloads:"
-    echo "$RELEASE_JSON" | grep -o '"browser_download_url":"[^"]*' | cut -d'"' -f4 || true
+    echo "$RELEASE_JSON" | grep -o '"browser_download_url": *"[^"]*' | cut -d'"' -f4 || true
     exit 1
 fi
 
