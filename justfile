@@ -46,8 +46,62 @@ build-windows: (_run "build-windows")
 # Build all 5 targets and create release directory
 release-all: (_run "release-all")
 
-# Build ARM binary and create release directory
-release: (_run "release")
+# Bump version, build all targets, and publish to GitHub
+release: _bump (_run "release-all") _publish
+
+# Prompt for version bump type and update Cargo.toml
+[private]
+_bump:
+    #!/usr/bin/env bash
+    set -e
+    CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+    echo "Current version: ${CURRENT}"
+    echo ""
+    echo "  1) patch  → ${MAJOR}.${MINOR}.$((PATCH+1))"
+    echo "  2) minor  → ${MAJOR}.$((MINOR+1)).0"
+    echo "  3) major  → $((MAJOR+1)).0.0"
+    echo ""
+    read -rp "Bump type [1/2/3]: " CHOICE
+    case "$CHOICE" in
+        1|patch) NEW="${MAJOR}.${MINOR}.$((PATCH+1))" ;;
+        2|minor) NEW="${MAJOR}.$((MINOR+1)).0" ;;
+        3|major) NEW="$((MAJOR+1)).0.0" ;;
+        *) echo "Invalid choice"; exit 1 ;;
+    esac
+    sed -i '' "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" Cargo.toml
+    echo "Bumped ${CURRENT} → ${NEW}"
+
+# Publish release assets to GitHub
+[private]
+_publish:
+    #!/usr/bin/env bash
+    set -e
+    NAME=$(grep '^name' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    TAG="v${VERSION}"
+    ASSETS=(release/${NAME}-${VERSION}-*)
+    if [ ${#ASSETS[@]} -eq 0 ]; then
+        echo "No release assets found for ${NAME}-${VERSION}"
+        exit 1
+    fi
+    echo "Publishing ${TAG} to GitHub (${#ASSETS[@]} assets)..."
+    git add -A && git commit -m "Release ${TAG}" || true
+    git tag -f "$TAG"
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    git push origin "$BRANCH" --force
+    git push origin "$TAG" --force
+    if gh release view "$TAG" --repo jensbech/feeding-tube &>/dev/null; then
+        echo "Deleting existing release ${TAG}..."
+        gh release delete "$TAG" --repo jensbech/feeding-tube --yes --cleanup-tag=false
+    fi
+    gh release create "$TAG" "${ASSETS[@]}" \
+        --repo jensbech/feeding-tube \
+        --title "$TAG" \
+        --notes "Release ${VERSION}" \
+        --latest
+    echo "Published ${TAG}"
+    echo "Done: https://github.com/jensbech/feeding-tube/releases/tag/${TAG}"
 
 # Build debug version (faster for development)
 build-dev: (_run "build-dev")
