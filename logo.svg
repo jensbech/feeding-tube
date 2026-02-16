@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Tunnel of concentric rounded rects - looking down the "tube" -->
+  <rect x="10" y="10" width="180" height="180" rx="16" fill="none" stroke="#ff4444" stroke-width="4" opacity="0.2"/>
+  <rect x="28" y="28" width="144" height="144" rx="14" fill="none" stroke="#ff4444" stroke-width="4" opacity="0.3"/>
+  <rect x="46" y="46" width="108" height="108" rx="12" fill="none" stroke="#ff4444" stroke-width="4" opacity="0.45"/>
+  <rect x="62" y="62" width="76" height="76" rx="10" fill="none" stroke="#ff4444" stroke-width="4" opacity="0.6"/>
+  <rect x="76" y="76" width="48" height="48" rx="8" fill="none" stroke="#ff4444" stroke-width="4" opacity="0.8"/>
+  <!-- Play triangle at the focal point -->
+  <polygon points="94,90 94,112 112,101" fill="#ff4444"/>
+</svg>
