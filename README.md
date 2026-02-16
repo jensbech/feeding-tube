@@ -8,7 +8,11 @@ A terminal UI for managing YouTube subscriptions and watching videos, built with
 curl -fsSL https://raw.githubusercontent.com/jensbech/feeding-tube/main/install | bash
 ```
 
-![screenshot](src/images/screenshot.png)
+![Channel List](screenshots/1.png)
+
+![Search](screenshots/2.png)
+
+![Search Results](screenshots/3.png)
 
 ## Requirements
 
