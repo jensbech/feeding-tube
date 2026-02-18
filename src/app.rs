@@ -76,6 +76,7 @@ pub struct App {
     pub watched_ids: HashSet<String>,
     pub settings: Settings,
     pub hide_shorts: bool,
+    pub max_resolution: String,
 
     // Filter
     pub filter_text: String,
@@ -113,6 +114,7 @@ impl App {
     pub fn new(db: Database) -> Self {
         let settings = db.get_settings();
         let hide_shorts = settings.hide_shorts;
+        let max_resolution = settings.max_resolution.clone();
         let watched_ids = db.get_watched_ids();
 
         App {
@@ -141,6 +143,7 @@ impl App {
             watched_ids,
             settings,
             hide_shorts,
+            max_resolution,
             filter_text: String::new(),
             input_text: String::new(),
             input_cursor: 0,
@@ -394,6 +397,22 @@ impl App {
             self.set_message("Showing all videos");
         }
         self.refresh_counts();
+    }
+
+    // ── Toggle Resolution ──────────────────────────────────
+
+    pub fn toggle_resolution(&mut self) {
+        if self.max_resolution == "1080" {
+            self.max_resolution = "max".to_string();
+            self.db
+                .update_setting("maxResolution", &serde_json::to_string("max").unwrap());
+            self.set_message("Resolution: unlimited");
+        } else {
+            self.max_resolution = "1080".to_string();
+            self.db
+                .update_setting("maxResolution", &serde_json::to_string("1080").unwrap());
+            self.set_message("Resolution: 1080p max");
+        }
     }
 
     // ── Toggle Watched ─────────────────────────────────────
@@ -855,6 +874,16 @@ mod tests {
         assert!(!app.hide_shorts);
         app.toggle_shorts();
         assert!(app.hide_shorts);
+    }
+
+    #[test]
+    fn test_toggle_resolution() {
+        let mut app = test_app();
+        assert_eq!(app.max_resolution, "1080"); // default
+        app.toggle_resolution();
+        assert_eq!(app.max_resolution, "max");
+        app.toggle_resolution();
+        assert_eq!(app.max_resolution, "1080");
     }
 
     #[test]

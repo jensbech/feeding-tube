@@ -65,6 +65,7 @@ pub async fn play_video(
     video_url: &str,
     video_id: Option<&str>,
     configured_player: &str,
+    max_resolution: &str,
 ) -> (PlayResult, Option<String>) {
     let id = video_id
         .map(|s| s.to_string())
@@ -91,6 +92,22 @@ pub async fn play_video(
 
     let args = player_args(&player);
     let mut cmd_args: Vec<&str> = args.to_vec();
+
+    let format_arg: String;
+    if max_resolution == "1080" {
+        match player.as_str() {
+            "mpv" => {
+                format_arg = "--ytdl-format=bestvideo[height<=1080]+bestaudio/best[height<=1080]/best".to_string();
+                cmd_args.push(&format_arg);
+            }
+            "iina" => {
+                format_arg = "--mpv-ytdl-format=bestvideo[height<=1080]+bestaudio/best[height<=1080]/best".to_string();
+                cmd_args.push(&format_arg);
+            }
+            _ => {}
+        }
+    }
+
     cmd_args.push(video_url);
 
     let result = std::process::Command::new(&player)
@@ -219,5 +236,55 @@ mod tests {
         assert!(SUPPORTED_PLAYERS.contains(&"mpv"));
         assert!(SUPPORTED_PLAYERS.contains(&"iina"));
         assert!(SUPPORTED_PLAYERS.contains(&"vlc"));
+    }
+
+    // ── Resolution format arg tests ─────────────────────────
+
+    fn build_cmd_args(player: &str, max_resolution: &str) -> Vec<String> {
+        let args = player_args(player);
+        let mut cmd_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+        if max_resolution == "1080" {
+            match player {
+                "mpv" => {
+                    cmd_args.push("--ytdl-format=bestvideo[height<=1080]+bestaudio/best[height<=1080]/best".to_string());
+                }
+                "iina" => {
+                    cmd_args.push("--mpv-ytdl-format=bestvideo[height<=1080]+bestaudio/best[height<=1080]/best".to_string());
+                }
+                _ => {}
+            }
+        }
+        cmd_args
+    }
+
+    #[test]
+    fn test_resolution_1080_mpv() {
+        let args = build_cmd_args("mpv", "1080");
+        assert!(args.iter().any(|a| a.starts_with("--ytdl-format=")));
+    }
+
+    #[test]
+    fn test_resolution_max_mpv() {
+        let args = build_cmd_args("mpv", "max");
+        assert!(!args.iter().any(|a| a.starts_with("--ytdl-format=")));
+    }
+
+    #[test]
+    fn test_resolution_1080_iina() {
+        let args = build_cmd_args("iina", "1080");
+        assert!(args.iter().any(|a| a.starts_with("--mpv-ytdl-format=")));
+    }
+
+    #[test]
+    fn test_resolution_max_iina() {
+        let args = build_cmd_args("iina", "max");
+        assert!(!args.iter().any(|a| a.starts_with("--mpv-ytdl-format=")));
+    }
+
+    #[test]
+    fn test_resolution_1080_vlc_no_format_arg() {
+        let args = build_cmd_args("vlc", "1080");
+        assert!(!args.iter().any(|a| a.contains("ytdl-format")));
     }
 }

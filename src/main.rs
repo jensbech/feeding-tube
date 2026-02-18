@@ -560,6 +560,9 @@ async fn handle_channel_keys(
         KeyCode::Char('m') => {
             app.mode = Mode::ConfirmMarkAll;
         }
+        KeyCode::Char('h') => {
+            app.toggle_resolution();
+        }
         _ => {}
     }
     Ok(false)
@@ -635,6 +638,9 @@ async fn handle_video_keys(
                 load_videos_for_screen(app).await;
             }
         }
+        KeyCode::Char('h') => {
+            app.toggle_resolution();
+        }
         _ => {}
     }
     Ok(false)
@@ -687,6 +693,9 @@ async fn handle_search_keys(
             } else if results_len > 0 {
                 handle_fetch_description_search(app, _terminal).await;
             }
+        }
+        KeyCode::Char('h') => {
+            app.toggle_resolution();
         }
         _ => {}
     }
@@ -1044,7 +1053,7 @@ async fn handle_play_video(app: &mut App) {
         app.set_message(&format!("Opening: {}", title));
 
         let (result, _video_id) =
-            player::play_video(&url, Some(&id), &app.settings.player).await;
+            player::play_video(&url, Some(&id), &app.settings.player, &app.max_resolution).await;
 
         if result.success {
             app.set_message(&format!("Playing in {}", result.player));
@@ -1075,7 +1084,7 @@ async fn handle_play_search_result(app: &mut App) {
         app.set_message(&format!("Opening: {}", title));
 
         let (result, _video_id) =
-            player::play_video(&url, Some(&id), &app.settings.player).await;
+            player::play_video(&url, Some(&id), &app.settings.player, &app.max_resolution).await;
 
         if result.success {
             app.set_message(&format!("Playing in {}", result.player));

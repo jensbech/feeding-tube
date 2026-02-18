@@ -35,6 +35,7 @@ pub struct Settings {
     pub player: String,
     pub videos_per_channel: i64,
     pub hide_shorts: bool,
+    pub max_resolution: String,
 }
 
 impl Default for Settings {
@@ -43,6 +44,7 @@ impl Default for Settings {
             player: "mpv".to_string(),
             videos_per_channel: 15,
             hide_shorts: true,
+            max_resolution: "1080".to_string(),
         }
     }
 }
@@ -416,6 +418,11 @@ impl Database {
                 "hideShorts" => {
                     if let Ok(v) = serde_json::from_str::<bool>(&value) {
                         settings.hide_shorts = v;
+                    }
+                }
+                "maxResolution" => {
+                    if let Ok(v) = serde_json::from_str::<String>(&value) {
+                        settings.max_resolution = v;
                     }
                 }
                 _ => {}
@@ -1195,6 +1202,7 @@ mod tests {
         assert_eq!(settings.player, "mpv");
         assert_eq!(settings.videos_per_channel, 15);
         assert!(settings.hide_shorts);
+        assert_eq!(settings.max_resolution, "1080");
     }
 
     #[test]
@@ -1206,6 +1214,24 @@ mod tests {
         let settings = db.get_settings();
         assert_eq!(settings.player, "vlc");
         assert!(!settings.hide_shorts);
+    }
+
+    #[test]
+    fn test_max_resolution_setting() {
+        let db = test_db();
+        // Default is 1080
+        let settings = db.get_settings();
+        assert_eq!(settings.max_resolution, "1080");
+
+        // Update to max
+        db.update_setting("maxResolution", "\"max\"");
+        let settings = db.get_settings();
+        assert_eq!(settings.max_resolution, "max");
+
+        // Update back to 1080
+        db.update_setting("maxResolution", "\"1080\"");
+        let settings = db.get_settings();
+        assert_eq!(settings.max_resolution, "1080");
     }
 
     #[test]

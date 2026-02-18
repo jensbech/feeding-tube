@@ -145,6 +145,20 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
+    // Resolution indicator
+    spans.push(Span::styled(" │ ", Style::default().fg(DARK_GRAY)));
+    if app.max_resolution == "1080" {
+        spans.push(Span::styled(
+            "1080p",
+            Style::default().fg(YELLOW),
+        ));
+    } else {
+        spans.push(Span::styled(
+            "max res",
+            Style::default().fg(GRAY),
+        ));
+    }
+
     // Loading indicator
     if app.loading || !app.loading_message.is_empty() {
         spans.push(Span::styled(" │ ", Style::default().fg(DARK_GRAY)));
@@ -743,6 +757,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
                         "s",
                         if app.hide_shorts { "+shorts" } else { "-shorts" },
                     ));
+                    spans.push(key_hint("h", "d"));
                     spans.push(key_hint("r", "efresh"));
                     spans.push(key_hint("m", "ark all"));
                     spans.push(key_hint("q", "uit"));
@@ -761,6 +776,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
                         "s",
                         if app.hide_shorts { "+shorts" } else { "-shorts" },
                     ));
+                    spans.push(key_hint("h", "d"));
                     if app.current_channel.is_none() && app.total_pages() > 1 {
                         spans.push(key_hint("n", "ext"));
                         spans.push(key_hint("p", "rev"));
