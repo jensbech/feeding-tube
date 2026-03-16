@@ -389,6 +389,31 @@ input:focus { border-color: var(--accent); }
 .btn-watch:hover { color: var(--accent); }
 .btn-watch.is-watched { color: var(--green); font-weight: 700; }
 
+.video-table tr {
+  position: relative;
+  overflow: hidden;
+}
+
+.swipe-bg {
+  display: none;
+  position: absolute;
+  top: 0; bottom: 0; left: 0; right: 0;
+  z-index: 0;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 20px;
+  font-size: 20px;
+  color: #fff;
+  pointer-events: none;
+}
+
+.swipe-bg.watched-bg { background: var(--green); }
+.swipe-bg.unwatched-bg { background: var(--highlight); }
+
+.video-table tr td { position: relative; z-index: 1; background: var(--bg); transition: transform 0.15s ease; }
+.video-table tr.watched td { background: var(--bg); }
+.video-table tr.swiping td { transition: none; }
+
 .pagination {
   display: flex;
   align-items: center;
@@ -1535,12 +1560,87 @@ function closeMobileSidebar() {
 
 let touchStartX = 0;
 let touchStartY = 0;
+let swipeRow = null;
+let swipeStartX = 0;
+let swipeStartY = 0;
+let swipeLocked = false;
+
 document.addEventListener('touchstart', (e) => {
   touchStartX = e.touches[0].clientX;
   touchStartY = e.touches[0].clientY;
+
+  const row = e.target.closest('.video-table tr[data-vid]');
+  if (row) {
+    swipeRow = row;
+    swipeStartX = e.touches[0].clientX;
+    swipeStartY = e.touches[0].clientY;
+    swipeLocked = false;
+    if (!row.querySelector('.swipe-bg')) {
+      const bg = document.createElement('div');
+      bg.className = 'swipe-bg';
+      row.insertBefore(bg, row.firstChild);
+    }
+  } else {
+    swipeRow = null;
+  }
+}, { passive: true });
+
+document.addEventListener('touchmove', (e) => {
+  if (!swipeRow) return;
+  const dx = e.touches[0].clientX - swipeStartX;
+  const dy = e.touches[0].clientY - swipeStartY;
+  if (!swipeLocked && Math.abs(dy) > Math.abs(dx)) {
+    swipeRow = null;
+    return;
+  }
+  swipeLocked = true;
+  const isWatched = state.watchedIds.has(swipeRow.dataset.vid);
+  const swipeBg = swipeRow.querySelector('.swipe-bg');
+  if (dx < -30) {
+    swipeRow.classList.add('swiping');
+    swipeRow.querySelectorAll('td').forEach(td => td.style.transform = `translateX(${dx}px)`);
+    if (swipeBg) {
+      swipeBg.style.display = 'flex';
+      swipeBg.className = 'swipe-bg ' + (isWatched ? 'unwatched-bg' : 'watched-bg');
+      swipeBg.textContent = isWatched ? '○' : '✓';
+    }
+  } else {
+    swipeRow.querySelectorAll('td').forEach(td => td.style.transform = '');
+    if (swipeBg) swipeBg.style.display = 'none';
+  }
 }, { passive: true });
 
 document.addEventListener('touchend', (e) => {
+  if (swipeRow && swipeLocked) {
+    const dx = e.changedTouches[0].clientX - swipeStartX;
+    const row = swipeRow;
+    const swipeBg = row.querySelector('.swipe-bg');
+    row.classList.remove('swiping');
+    row.querySelectorAll('td').forEach(td => td.style.transform = '');
+    if (swipeBg) swipeBg.style.display = 'none';
+
+    if (dx < -80) {
+      const vid = row.dataset.vid;
+      const btn = row.querySelector('.btn-watch');
+      api(`/api/videos/${encodeURIComponent(vid)}/watched`, { method: 'POST' }).then(data => {
+        if (data.watched) {
+          state.watchedIds.add(vid);
+        } else {
+          state.watchedIds.delete(vid);
+        }
+        row.classList.toggle('watched', data.watched);
+        if (btn) {
+          btn.classList.toggle('is-watched', data.watched);
+          btn.innerHTML = data.watched ? '&#10003;' : '&#9675;';
+        }
+        loadChannels();
+      });
+    }
+    swipeRow = null;
+    return;
+  }
+  swipeRow = null;
+
   const dx = e.changedTouches[0].clientX - touchStartX;
   const dy = e.changedTouches[0].clientY - touchStartY;
   if (Math.abs(dy) > Math.abs(dx)) return;
