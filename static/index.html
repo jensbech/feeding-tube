@@ -762,8 +762,13 @@ tr.kb-focus .video-title { color: var(--cyan); }
         <button class="search-clear" id="searchClear">&times;</button>
       </div>
       <div class="header-actions">
+        <button class="btn-icon" id="bgPlayBtn" title="Background playback" style="display:none;">
+          <span id="bgPlayIcon">&#9835;</span>
+          <span class="btn-label" id="bgPlayLabel">BG off</span>
+        </button>
         <button class="btn-icon" id="toggleShortsBtn" title="Toggle shorts visibility">
-          <span id="shortsLabel">Shorts off</span>
+          <span id="shortsIcon">S</span>
+          <span class="btn-label" id="shortsLabel">Shorts off</span>
         </button>
         <button class="btn-icon" id="toggleResBtn" title="Toggle resolution">
           <span id="resIcon">HD</span>
@@ -813,6 +818,7 @@ const state = {
   loading: false,
   sortUnwatchedFirst: true,
   focusedRow: -1,
+  bgPlay: false,
 };
 
 function toast(msg, type = '') {
@@ -1203,7 +1209,13 @@ async function openPlayer(videoId) {
   } else {
     vid.src = `/api/stream/${encodeURIComponent(videoId)}`;
   }
+
+  if (state.bgPlay) {
+    vid.addEventListener('playing', () => startBgAudio(videoId), { once: true });
+  }
 }
+
+let bgAudio = null;
 
 function closePlayer() {
   currentPlayingId = null;
@@ -1214,10 +1226,92 @@ function closePlayer() {
     vid.pause();
     vid.src = '';
   }
+  if (bgAudio) {
+    bgAudio.pause();
+    bgAudio.src = '';
+    bgAudio = null;
+  }
   container.innerHTML = '';
   document.getElementById('playerModal').classList.remove('open');
   document.body.style.overflow = '';
 }
+
+const isMobileDevice = /Android|iPhone|iPad|iPod|Mobile|webOS/i.test(navigator.userAgent) || (window.innerWidth <= 768);
+if (isMobileDevice) {
+  document.getElementById('bgPlayBtn').style.display = '';
+}
+
+document.getElementById('bgPlayBtn').addEventListener('click', () => {
+  state.bgPlay = !state.bgPlay;
+  updateBgPlayButton();
+  if (state.bgPlay && currentPlayingId) {
+    startBgAudio(currentPlayingId);
+  } else if (!state.bgPlay && bgAudio) {
+    bgAudio.pause();
+    bgAudio.src = '';
+    bgAudio = null;
+  }
+  toast(state.bgPlay ? 'Background play on' : 'Background play off', 'success');
+});
+
+function updateBgPlayButton() {
+  const btn = document.getElementById('bgPlayBtn');
+  const icon = document.getElementById('bgPlayIcon');
+  const label = document.getElementById('bgPlayLabel');
+  if (state.bgPlay) {
+    btn.classList.add('active');
+    label.textContent = 'BG on';
+  } else {
+    btn.classList.remove('active');
+    label.textContent = 'BG off';
+  }
+}
+
+async function startBgAudio(videoId) {
+  if (bgAudio) {
+    bgAudio.pause();
+    bgAudio.src = '';
+  }
+  try {
+    const data = await api(`/api/videos/${encodeURIComponent(videoId)}/direct-url`);
+    if (data && data.url) {
+      bgAudio = new Audio(data.url);
+      bgAudio.play().catch(() => {});
+      const vid = document.getElementById('playerContainer').querySelector('video');
+      if (vid) {
+        bgAudio.currentTime = vid.currentTime;
+        vid.addEventListener('seeked', () => { if (bgAudio) bgAudio.currentTime = vid.currentTime; });
+      }
+      if ('mediaSession' in navigator) {
+        const video = state.videos.find(v => v.id === videoId);
+        if (video) {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: video.title,
+            artist: video.channel_name || 'FeedingTube',
+          });
+        }
+      }
+    }
+  } catch {}
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!state.bgPlay || !currentPlayingId) return;
+  if (document.hidden) {
+    const vid = document.getElementById('playerContainer').querySelector('video');
+    if (vid && !vid.paused && !bgAudio) {
+      startBgAudio(currentPlayingId);
+    }
+  } else {
+    if (bgAudio) {
+      const vid = document.getElementById('playerContainer').querySelector('video');
+      if (vid) vid.currentTime = bgAudio.currentTime;
+      bgAudio.pause();
+      bgAudio.src = '';
+      bgAudio = null;
+    }
+  }
+});
 
 document.getElementById('modalClose').addEventListener('click', closePlayer);
 document.getElementById('playerModal').addEventListener('click', (e) => {
@@ -1374,12 +1468,15 @@ document.getElementById('toggleShortsBtn').addEventListener('click', async funct
 
 function updateShortsButton() {
   const btn = document.getElementById('toggleShortsBtn');
+  const icon = document.getElementById('shortsIcon');
   const label = document.getElementById('shortsLabel');
   if (state.hideShorts) {
     btn.classList.remove('active');
+    icon.style.opacity = '0.5';
     label.textContent = 'Shorts off';
   } else {
     btn.classList.add('active');
+    icon.style.opacity = '1';
     label.textContent = 'Shorts on';
   }
 }
