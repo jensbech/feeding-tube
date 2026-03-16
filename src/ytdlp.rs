@@ -420,29 +420,34 @@ pub async fn get_video_description(
 
 // ── Stream URL ─────────────────────────────────────────────
 
-pub async fn get_stream_url(video_url: &str) -> Result<Vec<String>, String> {
+pub async fn get_stream_urls(video_url: &str, max_resolution: &str) -> Result<Vec<String>, String> {
+    let format = if max_resolution == "1080" {
+        "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+    } else {
+        "bestvideo+bestaudio/best"
+    };
     let output = Command::new("yt-dlp")
-        .args([
-            "-f",
-            "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-            "-g",
-            "--no-warnings",
-            video_url,
-        ])
+        .args(["-f", format, "-g", "--no-warnings", video_url])
         .output()
         .await
-        .map_err(|e| format!("Failed to get stream URL: {e}"))?;
+        .map_err(|e| format!("Failed to get stream URLs: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("yt-dlp error: {}", stderr.trim()));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout)
+    let urls: Vec<String> = String::from_utf8_lossy(&output.stdout)
         .trim()
         .lines()
         .map(|l| l.to_string())
-        .collect())
+        .collect();
+
+    if urls.is_empty() {
+        return Err("No stream URLs returned".to_string());
+    }
+
+    Ok(urls)
 }
 
 // ── Priming ────────────────────────────────────────────────

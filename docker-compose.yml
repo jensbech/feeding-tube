@@ -1,0 +1,11 @@
+services:
+  feeding-tube:
+    build: .
+    ports:
+      - "9876:8080"
+    volumes:
+      - feeding-tube-data:/data/.feeding-tube
+    restart: unless-stopped
+
+volumes:
+  feeding-tube-data:

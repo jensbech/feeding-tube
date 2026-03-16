@@ -1,0 +1,1491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#12121c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+<title>FeedingTube</title>
+<style>
+:root {
+  --bg: #12121c;
+  --card: #1e1e28;
+  --highlight: #373750;
+  --accent: #b4b4ff;
+  --cyan: #64c8ff;
+  --yellow: #e6c850;
+  --green: #63ba3c;
+  --red: #e5493a;
+  --gray: #78788c;
+  --light-gray: #c8c8d2;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  --sidebar-width: 280px;
+  --header-height: 56px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--light-gray);
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  font-family: var(--font);
+  cursor: pointer;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  padding: 6px 12px;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+button:hover { opacity: 0.85; }
+button:active { opacity: 0.7; }
+
+input {
+  font-family: var(--font);
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--light-gray);
+  border: 1px solid var(--highlight);
+  border-radius: 4px;
+  padding: 6px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input:focus { border-color: var(--accent); }
+
+.layout {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  background: var(--card);
+  border-right: 1px solid var(--highlight);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  padding: 12px;
+  border-bottom: 1px solid var(--highlight);
+  flex-shrink: 0;
+}
+
+.sidebar-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.sidebar-header h1 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+}
+
+.add-channel-form {
+  display: flex;
+  gap: 6px;
+}
+
+.add-channel-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-channel-form button {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 6px 10px;
+  flex-shrink: 0;
+}
+
+.channel-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.channel-list::-webkit-scrollbar { width: 6px; }
+.channel-list::-webkit-scrollbar-track { background: transparent; }
+.channel-list::-webkit-scrollbar-thumb { background: var(--highlight); border-radius: 3px; }
+
+.channel-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+  gap: 8px;
+  position: relative;
+}
+
+.channel-item:hover { background: var(--highlight); }
+.channel-item.active { background: var(--highlight); border-left: 3px solid var(--accent); padding-left: 9px; }
+.channel-item.fully-watched { opacity: 0.5; }
+
+.channel-name {
+  flex: 1;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.channel-badge {
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.channel-delete {
+  opacity: 0;
+  background: none;
+  color: var(--gray);
+  padding: 2px 4px;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: opacity 0.1s, color 0.1s;
+}
+
+.channel-item:hover .channel-delete { opacity: 1; }
+.channel-delete:hover { color: var(--red) !important; }
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.header {
+  height: var(--header-height);
+  background: var(--card);
+  border-bottom: 1px solid var(--highlight);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.mobile-menu-btn {
+  display: none;
+  background: none;
+  color: var(--light-gray);
+  font-size: 20px;
+  padding: 4px 8px;
+}
+
+.search-bar {
+  flex: 1;
+  max-width: 400px;
+  position: relative;
+}
+
+.search-bar input {
+  width: 100%;
+  padding-left: 32px;
+}
+
+.search-bar .search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--gray);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.search-bar .search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  color: var(--gray);
+  font-size: 14px;
+  padding: 2px 4px;
+  display: none;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.btn-icon {
+  background: none;
+  color: var(--gray);
+  padding: 6px 8px;
+  font-size: 14px;
+  border-radius: 4px;
+  position: relative;
+}
+
+.btn-icon:hover { background: var(--highlight); color: var(--light-gray); }
+.btn-icon.active { color: var(--accent); }
+.btn-icon .btn-label { font-size: 12px; margin-left: 4px; }
+
+.btn-action {
+  background: var(--highlight);
+  color: var(--light-gray);
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+.btn-action:hover { background: var(--gray); }
+
+.btn-danger {
+  background: var(--red);
+  color: white;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.content::-webkit-scrollbar { width: 8px; }
+.content::-webkit-scrollbar-track { background: transparent; }
+.content::-webkit-scrollbar-thumb { background: var(--highlight); border-radius: 4px; }
+
+.content-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.content-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--light-gray);
+}
+
+.content-header .channel-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.video-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.video-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--gray);
+  border-bottom: 1px solid var(--highlight);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+  white-space: nowrap;
+}
+
+.video-table td {
+  padding: 8px 10px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(55, 55, 80, 0.4);
+  vertical-align: middle;
+}
+
+.video-table tr { transition: background 0.1s; }
+.video-table tbody tr:hover { background: var(--card); }
+.video-table tr.watched { opacity: 0.4; }
+.video-table tr.is-short .video-title::after {
+  content: "SHORT";
+  font-size: 9px;
+  background: var(--yellow);
+  color: var(--bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-weight: 700;
+}
+
+.video-title {
+  color: var(--light-gray);
+  cursor: pointer;
+  max-width: 500px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  transition: color 0.1s;
+}
+
+.video-title:hover { color: var(--cyan); }
+
+.video-subtitle {
+  display: none;
+  font-size: 11px;
+  color: var(--gray);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.video-channel {
+  color: var(--gray);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.video-channel:hover { color: var(--accent); }
+
+.video-date { color: var(--gray); font-size: 12px; white-space: nowrap; }
+.video-duration { color: var(--gray); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.video-views { color: var(--gray); font-size: 12px; white-space: nowrap; text-align: right; }
+
+.btn-watch {
+  background: none;
+  color: var(--gray);
+  padding: 4px 6px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.btn-watch:hover { color: var(--accent); }
+.btn-watch.is-watched { color: var(--green); font-weight: 700; }
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+}
+
+.pagination button {
+  background: var(--highlight);
+  color: var(--light-gray);
+  padding: 6px 14px;
+}
+
+.pagination button:disabled { opacity: 0.3; cursor: default; }
+.pagination .page-info { font-size: 12px; color: var(--gray); }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+}
+
+.modal-overlay.open { opacity: 1; visibility: visible; }
+
+.modal {
+  background: var(--card);
+  border-radius: 8px;
+  width: 90vw;
+  max-width: 960px;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transform: scale(0.95);
+  transition: transform 0.2s;
+}
+
+.modal-overlay.open .modal { transform: scale(1); }
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  padding: 16px;
+  gap: 12px;
+  border-bottom: 1px solid var(--highlight);
+}
+
+.modal-title {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.modal-close {
+  background: none;
+  color: var(--gray);
+  font-size: 20px;
+  padding: 0 4px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.modal-close:hover { color: var(--light-gray); }
+
+.player-container {
+  position: relative;
+  width: 100%;
+  background: #000;
+}
+
+.player-container video {
+  width: 100%;
+  max-height: 70vh;
+  display: block;
+}
+
+.player-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 80px;
+  gap: 10px;
+  color: var(--gray);
+  font-size: 13px;
+}
+
+.player-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  gap: 10px;
+  color: var(--gray);
+  font-size: 13px;
+}
+
+.player-error a { font-size: 12px; }
+
+.description-toggle {
+  padding: 10px 16px;
+  border-top: 1px solid var(--highlight);
+}
+
+.description-toggle button {
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.description-content {
+  padding: 0 16px 16px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 13px;
+  color: var(--gray);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  display: none;
+}
+
+.description-content.open { display: block; }
+
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  background: var(--card);
+  border: 1px solid var(--highlight);
+  border-left: 3px solid var(--accent);
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--light-gray);
+  animation: toast-in 0.2s ease-out;
+  max-width: 320px;
+}
+
+.toast.error { border-left-color: var(--red); }
+.toast.success { border-left-color: var(--green); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--highlight);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px;
+  gap: 10px;
+  color: var(--gray);
+  font-size: 13px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: var(--gray);
+  text-align: center;
+  gap: 8px;
+}
+
+.empty-state .empty-icon { font-size: 36px; opacity: 0.4; }
+.empty-state p { font-size: 13px; }
+
+.mobile-sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 500;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 501;
+    width: 280px;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .sidebar.open { transform: translateX(0); }
+  .mobile-sidebar-overlay.open { display: block; }
+  .mobile-menu-btn { display: block; }
+
+  .video-table .col-channel,
+  .video-table .col-views { display: none; }
+
+  .video-subtitle { display: block; }
+  .video-title { max-width: none; white-space: normal; display: block; line-height: 1.4; }
+
+  .content { padding: 10px; }
+  .content-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .content-header .channel-actions { margin-left: 0; width: 100%; }
+  .content-header .channel-actions button { flex: 1; padding: 10px; font-size: 13px; }
+
+  .channel-item { padding: 12px; min-height: 44px; }
+  .channel-delete { opacity: 0.5; }
+
+  .search-bar { max-width: none; }
+
+  .modal { width: 100vw; max-width: none; border-radius: 12px 12px 0 0; max-height: 95vh; }
+  .modal-overlay { align-items: flex-end; }
+  .modal-close { font-size: 24px; padding: 4px 8px; min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+  .modal-header { padding: 14px; }
+  .modal-meta { padding: 4px 14px 2px; }
+  .description-toggle { padding: 10px 14px; }
+  .description-toggle button { padding: 8px 0; font-size: 13px; }
+
+  .player-container video { max-height: 50vh; }
+
+  .video-table td { padding: 10px 8px; }
+  .video-table th { display: none; }
+  .video-table .col-date,
+  .video-table .col-duration { display: none; }
+
+  .btn-watch { padding: 8px 10px; font-size: 20px; min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+
+  .pagination { padding: 12px 0; gap: 8px; }
+  .pagination button { padding: 12px 20px; font-size: 14px; flex: 1; }
+
+  .toast-container { top: auto; bottom: 16px; right: 8px; left: 8px; }
+  .toast { max-width: none; }
+
+  .header { padding: 0 10px; gap: 8px; }
+  .header-actions { gap: 2px; }
+  .btn-icon { padding: 8px; min-width: 40px; min-height: 40px; display: flex; align-items: center; justify-content: center; }
+}
+
+@media (max-width: 480px) {
+  .header-actions .btn-label { display: none; }
+  .content-header h2 { font-size: 16px; }
+  .modal-title { font-size: 14px; }
+
+  .video-table .col-date { display: none; }
+
+  .add-channel-form input { font-size: 16px; padding: 8px 10px; }
+  .search-bar input { font-size: 16px; padding: 8px 10px 8px 32px; }
+}
+
+.sidebar-footer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--highlight);
+  font-size: 11px;
+  color: var(--gray);
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+}
+
+.content-count {
+  font-size: 13px;
+  color: var(--gray);
+  font-weight: 400;
+}
+
+.modal-meta {
+  padding: 6px 16px 2px;
+  font-size: 12px;
+  color: var(--gray);
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.modal-meta a {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--gray);
+  transition: color 0.15s;
+}
+
+.modal-meta a:hover { color: var(--red); text-decoration: none; }
+
+.all-badge {
+  background: var(--cyan);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+tr.kb-focus td { background: rgba(180, 180, 255, 0.08); }
+tr.kb-focus .video-title { color: var(--cyan); }
+
+.kbd-help {
+  padding: 8px 12px;
+  font-size: 10px;
+  color: var(--gray);
+  border-top: 1px solid var(--highlight);
+  flex-shrink: 0;
+  line-height: 1.6;
+}
+
+@media (max-width: 768px) {
+  .kbd-help { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="toast-container" id="toasts"></div>
+
+<div class="mobile-sidebar-overlay" id="sidebarOverlay"></div>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title-row">
+        <h1>FeedingTube</h1>
+        <button class="btn-icon active" id="sortSidebarBtn" title="Unwatched channels first">&#8645;</button>
+      </div>
+      <form class="add-channel-form" id="addChannelForm">
+        <input type="text" placeholder="Channel URL..." id="channelUrlInput" autocomplete="off">
+        <button type="submit" id="addChannelBtn">+</button>
+      </form>
+    </div>
+    <div class="channel-list" id="channelList"></div>
+    <div class="kbd-help" id="kbdHelp">
+      <b>j</b>/<b>k</b> navigate &middot; <b>enter</b> play &middot; <b>w</b> watched &middot; <b>r</b> refresh
+    </div>
+    <div class="sidebar-footer" id="sidebarFooter"></div>
+  </aside>
+
+  <div class="main">
+    <header class="header">
+      <button class="mobile-menu-btn" id="mobileMenuBtn">&#9776;</button>
+      <div class="search-bar">
+        <span class="search-icon">&#128269;</span>
+        <input type="text" placeholder="Search YouTube..." id="searchInput" autocomplete="off">
+        <button class="search-clear" id="searchClear">&times;</button>
+      </div>
+      <div class="header-actions">
+        <button class="btn-icon" id="toggleShortsBtn" title="Toggle shorts visibility">
+          <span id="shortsLabel">Shorts off</span>
+        </button>
+        <button class="btn-icon" id="toggleResBtn" title="Toggle resolution">
+          <span id="resIcon">HD</span>
+          <span class="btn-label" id="resLabel">1080p</span>
+        </button>
+        <button class="btn-icon" id="refreshBtn" title="Refresh feeds">
+          &#8635;
+          <span class="btn-label">Refresh</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="content" id="content"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="playerModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle"></div>
+      <button class="modal-close" id="modalClose">&times;</button>
+    </div>
+    <div class="modal-meta" id="modalMeta"></div>
+    <div class="player-container" id="playerContainer">
+      <div class="player-loading" id="playerLoading"><div class="spinner"></div> Loading stream...</div>
+    </div>
+    <div class="description-toggle">
+      <button id="descToggleBtn">Show description</button>
+    </div>
+    <div class="description-content" id="descContent"></div>
+  </div>
+</div>
+
+<script>
+const state = {
+  channels: [],
+  videos: [],
+  watchedIds: new Set(),
+  currentChannel: null,
+  currentPage: 0,
+  totalVideos: 0,
+  pageSize: 50,
+  hideShorts: true,
+  maxResolution: '1080',
+  isSearching: false,
+  searchQuery: '',
+  loading: false,
+  sortUnwatchedFirst: true,
+  focusedRow: -1,
+};
+
+function toast(msg, type = '') {
+  const el = document.createElement('div');
+  el.className = 'toast' + (type ? ' ' + type : '');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 200); }, 3000);
+}
+
+async function api(url, opts = {}) {
+  try {
+    const res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+    if (res.status === 204) return null;
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  } catch (err) {
+    toast(err.message, 'error');
+    throw err;
+  }
+}
+
+async function loadChannels() {
+  const [data, settings] = await Promise.all([
+    api('/api/channels'),
+    api('/api/settings'),
+  ]);
+  state.channels = data.channels;
+  state.hideShorts = data.hide_shorts;
+  state.maxResolution = settings.max_resolution;
+  renderSidebar();
+  updateShortsButton();
+  updateResButton();
+}
+
+async function loadWatched() {
+  const data = await api('/api/watched');
+  state.watchedIds = new Set(data.watched);
+}
+
+async function loadVideos(page = 0) {
+  state.loading = true;
+  state.isSearching = false;
+  state.currentPage = page;
+  renderContent();
+
+  let data;
+  if (state.currentChannel) {
+    data = await api(`/api/channels/${encodeURIComponent(state.currentChannel.id)}/videos?page=${page}`);
+  } else {
+    data = await api(`/api/videos?page=${page}`);
+  }
+
+  state.videos = data.videos;
+  state.totalVideos = data.total;
+  state.pageSize = data.page_size;
+  state.loading = false;
+  state.focusedRow = -1;
+  renderContent();
+  document.getElementById('content').scrollTop = 0;
+}
+
+async function searchVideos(query) {
+  if (!query.trim()) {
+    state.isSearching = false;
+    await loadVideos(0);
+    return;
+  }
+
+  state.loading = true;
+  state.isSearching = true;
+  state.searchQuery = query;
+  renderContent();
+
+  const data = await api(`/api/search?q=${encodeURIComponent(query)}`);
+  state.videos = data;
+  state.totalVideos = data.length;
+  state.loading = false;
+  renderContent();
+}
+
+function renderSidebar() {
+  const list = document.getElementById('channelList');
+  const totalUnwatched = state.channels.reduce((sum, c) => sum + c.new_count, 0);
+  const allItem = document.createElement('div');
+  allItem.className = 'channel-item' + (!state.currentChannel ? ' active' : '');
+  allItem.innerHTML = `<span class="channel-name">All Videos</span>${totalUnwatched > 0 ? `<span class="all-badge">${totalUnwatched}</span>` : ''}`;
+  allItem.onclick = () => selectChannel(null);
+
+  let channels = [...state.channels];
+  if (state.sortUnwatchedFirst) {
+    channels.sort((a, b) => {
+      const aHasNew = a.new_count > 0 ? 0 : 1;
+      const bHasNew = b.new_count > 0 ? 0 : 1;
+      return aHasNew - bHasNew;
+    });
+  }
+
+  let html = '';
+  channels.forEach(ch => {
+    const isActive = state.currentChannel && state.currentChannel.id === ch.id;
+    const classes = ['channel-item'];
+    if (isActive) classes.push('active');
+    if (ch.fully_watched && ch.new_count === 0) classes.push('fully-watched');
+
+    html += `<div class="${classes.join(' ')}" data-id="${ch.id}">
+      <span class="channel-name">${esc(ch.name)}</span>
+      ${ch.new_count > 0 ? `<span class="channel-badge">${ch.new_count}</span>` : ''}
+      <button class="channel-delete" data-id="${esc(ch.id)}" title="Remove channel">&times;</button>
+    </div>`;
+  });
+
+  list.innerHTML = '';
+  list.appendChild(allItem);
+  list.insertAdjacentHTML('beforeend', html);
+
+  list.querySelectorAll('.channel-item[data-id]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.classList.contains('channel-delete')) return;
+      const ch = state.channels.find(c => c.id === el.dataset.id);
+      if (ch) selectChannel(ch);
+    });
+  });
+
+  list.querySelectorAll('.channel-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ch = state.channels.find(c => c.id === btn.dataset.id);
+      if (!ch) return;
+      if (!confirm(`Remove "${ch.name}" and all its videos?`)) return;
+      await api(`/api/channels/${encodeURIComponent(ch.id)}`, { method: 'DELETE' });
+      toast(`Removed ${ch.name}`, 'success');
+      if (state.currentChannel && state.currentChannel.id === ch.id) {
+        state.currentChannel = null;
+      }
+      await loadChannels();
+      await loadVideos(0);
+    });
+  });
+
+  const totalVids = state.channels.reduce((s, c) => s + c.video_count, 0);
+  document.getElementById('sidebarFooter').innerHTML =
+    `<span>${state.channels.length} channels</span><span>${totalVids} videos</span>`;
+}
+
+function selectChannel(ch) {
+  state.currentChannel = ch;
+  state.isSearching = false;
+  document.getElementById('searchInput').value = '';
+  document.getElementById('searchClear').style.display = 'none';
+  renderSidebar();
+  loadVideos(0);
+  closeMobileSidebar();
+}
+
+function renderContent() {
+  const content = document.getElementById('content');
+
+  if (state.loading) {
+    content.innerHTML = `<div class="loading-overlay"><div class="spinner"></div> Loading...</div>`;
+    return;
+  }
+
+  let headerHtml = '<div class="content-header">';
+  if (state.isSearching) {
+    headerHtml += `<h2>Search: "${esc(state.searchQuery)}" <span class="content-count">(${state.totalVideos})</span></h2>`;
+  } else if (state.currentChannel) {
+    headerHtml += `<h2>${esc(state.currentChannel.name)} <span class="content-count">(${state.totalVideos})</span></h2>`;
+    headerHtml += `<div class="channel-actions">
+      <button class="btn-action" id="markWatchedBtn">Mark all watched</button>
+      <button class="btn-action" id="primeBtn">Fetch full history</button>
+    </div>`;
+  } else {
+    headerHtml += `<h2>All Videos <span class="content-count">(${state.totalVideos})</span></h2>`;
+  }
+  headerHtml += '</div>';
+
+  if (state.videos.length === 0) {
+    if (!state.isSearching && !state.currentChannel && state.channels.length === 0) {
+      content.innerHTML = `<div class="empty-state" style="padding-top:100px">
+        <div class="empty-icon" style="font-size:48px">&#128250;</div>
+        <h2 style="color:var(--accent);font-size:20px;margin:8px 0">Welcome to FeedingTube</h2>
+        <p style="max-width:400px;line-height:1.6">Add your first YouTube channel using the input in the sidebar.<br>
+        Paste any YouTube channel URL or video URL to get started.</p>
+        <p style="font-size:12px;color:var(--gray);margin-top:12px">Tip: You can also search YouTube using the search bar above.</p>
+      </div>`;
+    } else {
+      content.innerHTML = headerHtml + `<div class="empty-state">
+        <div class="empty-icon">&#9723;</div>
+        <p>${state.isSearching ? 'No results found.' : 'No videos yet.'}</p>
+      </div>`;
+    }
+    bindContentActions();
+    return;
+  }
+
+  const showChannel = !state.currentChannel;
+
+  let tableHtml = `<table class="video-table">
+    <thead><tr>
+      <th style="width:30px"></th>
+      <th>Title</th>
+      ${showChannel ? '<th class="col-channel">Channel</th>' : ''}
+      <th class="col-date">Date</th>
+      <th class="col-duration">Duration</th>
+      <th class="col-views" style="text-align:right">Views</th>
+    </tr></thead><tbody>`;
+
+  state.videos.forEach(v => {
+    const isWatched = state.watchedIds.has(v.id);
+    const classes = [];
+    if (isWatched) classes.push('watched');
+    if (v.is_short) classes.push('is-short');
+
+    const subParts = [];
+    if (showChannel && v.channel_name) subParts.push(esc(v.channel_name));
+    if (v.relative_date) subParts.push(esc(v.relative_date));
+    if (v.duration_string) subParts.push(esc(v.duration_string));
+
+    tableHtml += `<tr class="${classes.join(' ')}" data-vid="${esc(v.id)}">
+      <td><button class="btn-watch ${isWatched ? 'is-watched' : ''}" data-vid="${esc(v.id)}" title="Toggle watched">${isWatched ? '&#10003;' : '&#9675;'}</button></td>
+      <td><span class="video-title" data-vid="${esc(v.id)}" data-url="${esc(v.url)}" title="${esc(v.title)}">${esc(v.title)}</span><div class="video-subtitle">${subParts.join(' &middot; ')}</div></td>
+      ${showChannel ? `<td class="col-channel"><span class="video-channel" data-channel-id="${esc(v.channel_id || '')}">${esc(v.channel_name || '')}</span></td>` : ''}
+      <td class="video-date col-date">${esc(v.relative_date || '')}</td>
+      <td class="video-duration col-duration">${esc(v.duration_string || '')}</td>
+      <td class="video-views col-views">${v.view_count != null ? formatViews(v.view_count) : ''}</td>
+    </tr>`;
+  });
+
+  tableHtml += '</tbody></table>';
+
+  let paginationHtml = '';
+  if (!state.isSearching) {
+    const totalPages = Math.ceil(state.totalVideos / state.pageSize);
+    if (totalPages > 1) {
+      paginationHtml = `<div class="pagination">
+        <button id="prevPageBtn" ${state.currentPage === 0 ? 'disabled' : ''}>&#8592; Prev</button>
+        <span class="page-info">Page ${state.currentPage + 1} of ${totalPages}</span>
+        <button id="nextPageBtn" ${state.currentPage >= totalPages - 1 ? 'disabled' : ''}>Next &#8594;</button>
+      </div>`;
+    }
+  }
+
+  content.innerHTML = headerHtml + tableHtml + paginationHtml;
+  bindContentActions();
+}
+
+function bindContentActions() {
+  const content = document.getElementById('content');
+
+  const markBtn = content.querySelector('#markWatchedBtn');
+  if (markBtn) {
+    markBtn.addEventListener('click', async () => {
+      if (!state.currentChannel) return;
+      markBtn.disabled = true;
+      markBtn.textContent = 'Marking...';
+      const data = await api(`/api/channels/${encodeURIComponent(state.currentChannel.id)}/mark-watched`, { method: 'POST' });
+      toast(`Marked ${data.marked} videos as watched`, 'success');
+      await loadWatched();
+      await loadChannels();
+      renderContent();
+    });
+  }
+
+  const primeBtn = content.querySelector('#primeBtn');
+  if (primeBtn) {
+    primeBtn.addEventListener('click', async () => {
+      if (!state.currentChannel) return;
+      primeBtn.disabled = true;
+      primeBtn.textContent = 'Fetching...';
+      try {
+        const data = await api(`/api/channels/${encodeURIComponent(state.currentChannel.id)}/prime`, { method: 'POST' });
+        toast(`Added ${data.added} videos (${data.total} total)`, 'success');
+        await loadChannels();
+        await loadVideos(state.currentPage);
+      } catch (e) {
+        primeBtn.disabled = false;
+        primeBtn.textContent = 'Fetch full history';
+      }
+    });
+  }
+
+  content.querySelectorAll('.btn-watch').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const vid = btn.dataset.vid;
+      const data = await api(`/api/videos/${encodeURIComponent(vid)}/watched`, { method: 'POST' });
+      if (data.watched) {
+        state.watchedIds.add(vid);
+      } else {
+        state.watchedIds.delete(vid);
+      }
+      const row = btn.closest('tr');
+      row.classList.toggle('watched', data.watched);
+      btn.classList.toggle('is-watched', data.watched);
+      btn.innerHTML = data.watched ? '&#10003;' : '&#9675;';
+      loadChannels();
+    });
+  });
+
+  content.querySelectorAll('.video-title').forEach(el => {
+    el.addEventListener('click', () => openPlayer(el.dataset.vid));
+  });
+
+  content.querySelectorAll('.video-channel').forEach(el => {
+    el.addEventListener('click', () => {
+      const chId = el.dataset.channelId;
+      const ch = state.channels.find(c => c.id === chId);
+      if (ch) selectChannel(ch);
+    });
+  });
+
+  const prevBtn = content.querySelector('#prevPageBtn');
+  const nextBtn = content.querySelector('#nextPageBtn');
+  if (prevBtn) prevBtn.addEventListener('click', () => loadVideos(state.currentPage - 1));
+  if (nextBtn) nextBtn.addEventListener('click', () => loadVideos(state.currentPage + 1));
+}
+
+let currentPlayingId = null;
+
+async function openPlayer(videoId) {
+  const video = state.videos.find(v => v.id === videoId);
+  if (!video) return;
+
+  currentPlayingId = videoId;
+  document.getElementById('modalTitle').textContent = video.title;
+  document.title = `${video.title} - FeedingTube`;
+  document.getElementById('descContent').textContent = '';
+  document.getElementById('descContent').classList.remove('open');
+  document.getElementById('descToggleBtn').textContent = 'Show description';
+
+  const metaParts = [];
+  if (video.channel_name) metaParts.push(`<span>${esc(video.channel_name)}</span>`);
+  if (video.relative_date) metaParts.push(`<span>${esc(video.relative_date)}</span>`);
+  if (video.duration_string) metaParts.push(`<span>${esc(video.duration_string)}</span>`);
+  metaParts.push(`<a href="https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}" target="_blank" rel="noopener">Open on YouTube &#8599;</a>`);
+  document.getElementById('modalMeta').innerHTML = metaParts.join('');
+
+  const container = document.getElementById('playerContainer');
+  container.innerHTML = '<div class="player-loading"><div class="spinner"></div> Loading stream...</div>';
+
+  document.getElementById('playerModal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  if (!state.watchedIds.has(videoId)) {
+    api(`/api/videos/${encodeURIComponent(videoId)}/watched`, { method: 'POST' }).then(data => {
+      if (data && data.watched) {
+        state.watchedIds.add(videoId);
+        const row = document.querySelector(`tr[data-vid="${videoId}"]`);
+        if (row) {
+          row.classList.add('watched');
+          const btn = row.querySelector('.btn-watch');
+          if (btn) { btn.classList.add('is-watched'); btn.innerHTML = '&#10003;'; }
+        }
+        loadChannels();
+      }
+    });
+  }
+
+  const vid = document.createElement('video');
+  vid.controls = true;
+  vid.autoplay = true;
+  vid.setAttribute('playsinline', '');
+  vid.setAttribute('webkit-playsinline', '');
+  vid.onerror = () => {
+    if (currentPlayingId !== videoId) return;
+    container.innerHTML = `<div class="player-error"><span>Stream playback failed</span><a href="https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}" target="_blank" rel="noopener">Open on YouTube</a></div>`;
+  };
+  container.innerHTML = '';
+  container.appendChild(vid);
+
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile|webOS/i.test(navigator.userAgent) || (window.innerWidth <= 768);
+  if (isMobile) {
+    try {
+      const data = await api(`/api/videos/${encodeURIComponent(videoId)}/direct-url`);
+      if (data && data.url) {
+        vid.src = data.url;
+      } else {
+        vid.src = `/api/stream/${encodeURIComponent(videoId)}`;
+      }
+    } catch {
+      vid.src = `/api/stream/${encodeURIComponent(videoId)}`;
+    }
+  } else {
+    vid.src = `/api/stream/${encodeURIComponent(videoId)}`;
+  }
+}
+
+function closePlayer() {
+  currentPlayingId = null;
+  document.title = 'FeedingTube';
+  const container = document.getElementById('playerContainer');
+  const vid = container.querySelector('video');
+  if (vid) {
+    vid.pause();
+    vid.src = '';
+  }
+  container.innerHTML = '';
+  document.getElementById('playerModal').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+document.getElementById('modalClose').addEventListener('click', closePlayer);
+document.getElementById('playerModal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('playerModal')) closePlayer();
+});
+
+document.getElementById('descToggleBtn').addEventListener('click', async () => {
+  const descEl = document.getElementById('descContent');
+  const btn = document.getElementById('descToggleBtn');
+
+  if (descEl.classList.contains('open')) {
+    descEl.classList.remove('open');
+    btn.textContent = 'Show description';
+    return;
+  }
+
+  if (!currentPlayingId) return;
+
+  btn.textContent = 'Loading...';
+  try {
+    const data = await api(`/api/videos/${encodeURIComponent(currentPlayingId)}/description`);
+    descEl.textContent = data.description || 'No description available.';
+    descEl.classList.add('open');
+    btn.textContent = 'Hide description';
+  } catch {
+    btn.textContent = 'Show description';
+  }
+});
+
+function updateFocusedRow() {
+  document.querySelectorAll('tr.kb-focus').forEach(r => r.classList.remove('kb-focus'));
+  if (state.focusedRow >= 0 && state.focusedRow < state.videos.length) {
+    const rows = document.querySelectorAll('.video-table tbody tr');
+    if (rows[state.focusedRow]) {
+      rows[state.focusedRow].classList.add('kb-focus');
+      rows[state.focusedRow].scrollIntoView({ block: 'nearest' });
+    }
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  const modalOpen = document.getElementById('playerModal').classList.contains('open');
+  const inputFocused = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+
+  if (e.key === 'Escape') {
+    if (modalOpen) { closePlayer(); return; }
+    if (inputFocused) { document.activeElement.blur(); return; }
+  }
+
+  if (modalOpen || inputFocused) return;
+  if (state.videos.length === 0) return;
+
+  if (e.key === 'j' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    state.focusedRow = Math.min(state.focusedRow + 1, state.videos.length - 1);
+    updateFocusedRow();
+  } else if (e.key === 'k' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    state.focusedRow = Math.max(state.focusedRow - 1, 0);
+    updateFocusedRow();
+  } else if (e.key === 'Enter' && state.focusedRow >= 0) {
+    e.preventDefault();
+    openPlayer(state.videos[state.focusedRow].id);
+  } else if (e.key === 'w' && state.focusedRow >= 0) {
+    e.preventDefault();
+    const vid = state.videos[state.focusedRow].id;
+    const btn = document.querySelector(`button.btn-watch[data-vid="${vid}"]`);
+    if (btn) btn.click();
+  } else if (e.key === 'r') {
+    e.preventDefault();
+    document.getElementById('refreshBtn').click();
+  } else if (e.key === '/') {
+    e.preventDefault();
+    document.getElementById('searchInput').focus();
+  }
+});
+
+document.getElementById('addChannelForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('channelUrlInput');
+  const url = input.value.trim();
+  if (!url) return;
+
+  const btn = document.getElementById('addChannelBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px"></span>';
+
+  try {
+    const data = await api('/api/channels', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+    toast(`Added ${data.channel.name} (${data.videos_added} videos)`, 'success');
+    input.value = '';
+    await loadChannels();
+    const added = state.channels.find(c => c.id === data.channel.id);
+    if (added) selectChannel(added);
+    else await loadVideos(state.currentPage);
+  } catch (err) {}
+
+  btn.disabled = false;
+  btn.textContent = '+';
+});
+
+let searchTimeout;
+document.getElementById('searchInput').addEventListener('input', (e) => {
+  const val = e.target.value;
+  document.getElementById('searchClear').style.display = val ? 'block' : 'none';
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => searchVideos(val), 500);
+});
+
+document.getElementById('searchInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    clearTimeout(searchTimeout);
+    searchVideos(e.target.value);
+  }
+  if (e.key === 'Escape') {
+    e.target.blur();
+  }
+});
+
+document.getElementById('searchClear').addEventListener('click', () => {
+  document.getElementById('searchInput').value = '';
+  document.getElementById('searchClear').style.display = 'none';
+  state.isSearching = false;
+  loadVideos(0);
+});
+
+document.getElementById('refreshBtn').addEventListener('click', async function () {
+  this.disabled = true;
+  const origHtml = this.innerHTML;
+  this.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px"></span><span class="btn-label">Refreshing</span>';
+  try {
+    const data = await api('/api/refresh', { method: 'POST' });
+    toast(`Refreshed: ${data.videos_added} new videos`, 'success');
+    await loadChannels();
+    await loadWatched();
+    await loadVideos(state.currentPage);
+  } catch (err) {}
+  this.disabled = false;
+  this.innerHTML = origHtml;
+});
+
+document.getElementById('toggleShortsBtn').addEventListener('click', async function () {
+  const data = await api('/api/settings/hide-shorts', { method: 'POST' });
+  state.hideShorts = data.hide_shorts;
+  updateShortsButton();
+  await loadChannels();
+  await loadVideos(state.currentPage);
+  toast(state.hideShorts ? 'Shorts hidden' : 'Shorts visible', 'success');
+});
+
+function updateShortsButton() {
+  const btn = document.getElementById('toggleShortsBtn');
+  const label = document.getElementById('shortsLabel');
+  if (state.hideShorts) {
+    btn.classList.remove('active');
+    label.textContent = 'Shorts off';
+  } else {
+    btn.classList.add('active');
+    label.textContent = 'Shorts on';
+  }
+}
+
+function updateSortButton() {
+  const btn = document.getElementById('sortSidebarBtn');
+  if (!btn) return;
+  if (state.sortUnwatchedFirst) {
+    btn.classList.add('active');
+    btn.title = 'Unwatched channels first';
+  } else {
+    btn.classList.remove('active');
+    btn.title = 'Default channel order';
+  }
+}
+
+document.getElementById('toggleResBtn').addEventListener('click', async function () {
+  const data = await api('/api/settings/resolution', { method: 'POST' });
+  state.maxResolution = data.max_resolution;
+  updateResButton();
+  toast(state.maxResolution === '1080' ? 'Resolution: 1080p max' : 'Resolution: unlimited', 'success');
+});
+
+function updateResButton() {
+  const btn = document.getElementById('toggleResBtn');
+  const label = document.getElementById('resLabel');
+  const icon = document.getElementById('resIcon');
+  if (state.maxResolution === '1080') {
+    btn.classList.add('active');
+    icon.textContent = 'HD';
+    label.textContent = '1080p';
+  } else {
+    btn.classList.remove('active');
+    icon.textContent = '4K';
+    label.textContent = 'Max';
+  }
+}
+
+document.getElementById('mobileMenuBtn').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebarOverlay').classList.add('open');
+});
+
+document.getElementById('sidebarOverlay').addEventListener('click', closeMobileSidebar);
+
+document.getElementById('sortSidebarBtn').addEventListener('click', () => {
+  state.sortUnwatchedFirst = !state.sortUnwatchedFirst;
+  updateSortButton();
+  renderSidebar();
+});
+
+function closeMobileSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
+}
+
+let touchStartX = 0;
+let touchStartY = 0;
+document.addEventListener('touchstart', (e) => {
+  touchStartX = e.touches[0].clientX;
+  touchStartY = e.touches[0].clientY;
+}, { passive: true });
+
+document.addEventListener('touchend', (e) => {
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  if (Math.abs(dy) > Math.abs(dx)) return;
+
+  const sidebarOpen = document.getElementById('sidebar').classList.contains('open');
+  const modalOpen = document.getElementById('playerModal').classList.contains('open');
+  if (modalOpen) return;
+
+  if (dx > 80 && touchStartX < 40 && !sidebarOpen) {
+    document.getElementById('sidebar').classList.add('open');
+    document.getElementById('sidebarOverlay').classList.add('open');
+  } else if (dx < -80 && sidebarOpen) {
+    closeMobileSidebar();
+  }
+}, { passive: true });
+
+function esc(str) {
+  if (str == null) return '';
+  const div = document.createElement('div');
+  div.textContent = String(str);
+  return div.innerHTML;
+}
+
+function formatViews(n) {
+  if (n == null) return '';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+(async function init() {
+  updateSortButton();
+  try {
+    await Promise.all([loadChannels(), loadWatched()]);
+    await loadVideos(0);
+  } catch (err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state">
+      <div class="empty-icon">&#9888;</div>
+      <p>Failed to connect to the server.</p>
+    </div>`;
+  }
+})();
+</script>
+</body>
+</html>

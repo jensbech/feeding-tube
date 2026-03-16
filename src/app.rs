@@ -466,6 +466,7 @@ impl App {
             Some(&self.all_channel_ids),
             self.current_page,
             100,
+            false,
         );
         self.videos = result.videos;
         self.total_videos = result.total;

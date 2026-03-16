@@ -4,6 +4,8 @@ mod app;
 mod db;
 mod player;
 mod ui;
+#[cfg(feature = "web")]
+mod web;
 mod ytdlp;
 
 use std::collections::HashSet;
@@ -40,6 +42,16 @@ struct Cli {
     /// Fetch full history (all or specific channel by index/name)
     #[arg(short, long)]
     prime: Option<Option<String>>,
+
+    /// Start web UI server instead of TUI
+    #[cfg(feature = "web")]
+    #[arg(short, long)]
+    web: bool,
+
+    /// Port for web UI (default: 8080)
+    #[cfg(feature = "web")]
+    #[arg(long, default_value_t = 8080)]
+    port: u16,
 }
 
 // ── Non-interactive Commands ───────────────────────────────
@@ -1239,6 +1251,7 @@ async fn load_videos_for_screen(app: &mut App) {
                 Some(&app.all_channel_ids),
                 0,
                 100,
+                false,
             );
             app.videos = result.videos;
             app.total_videos = result.total;
@@ -1272,6 +1285,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(ref prime_arg) = cli.prime {
         handle_prime(prime_arg.clone()).await;
+        return Ok(());
+    }
+
+    #[cfg(feature = "web")]
+    if cli.web {
+        web::start(cli.port).await?;
         return Ok(());
     }
 

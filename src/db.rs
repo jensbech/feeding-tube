@@ -14,7 +14,7 @@ pub struct Subscription {
     pub added_at: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Video {
     pub id: String,
     pub title: String,
@@ -30,7 +30,7 @@ pub struct Video {
     pub view_count: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub player: String,
     pub videos_per_channel: i64,
@@ -56,7 +56,7 @@ pub struct PaginatedResult {
     pub videos: Vec<Video>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ChannelStats {
     pub video_count: usize,
     pub latest_date: Option<String>,
@@ -552,9 +552,11 @@ impl Database {
         channel_ids: Option<&[String]>,
         page: usize,
         page_size: usize,
+        hide_shorts: bool,
     ) -> PaginatedResult {
         let safe_page_size = page_size.clamp(1, 1000);
         let offset = page * safe_page_size;
+        let short_filter = if hide_shorts { " AND is_short = 0" } else { "" };
 
         let (total, videos) = if let Some(ids) = channel_ids {
             if ids.is_empty() {
@@ -569,8 +571,8 @@ impl Database {
             let ph_str = placeholders.join(",");
 
             let count_sql = format!(
-                "SELECT COUNT(*) FROM videos WHERE channel_id IN ({})",
-                ph_str
+                "SELECT COUNT(*) FROM videos WHERE channel_id IN ({}){}",
+                ph_str, short_filter
             );
             let mut count_stmt = self.conn.prepare(&count_sql).unwrap();
             let total: usize = count_stmt
@@ -578,8 +580,8 @@ impl Database {
                 .unwrap_or(0);
 
             let select_sql = format!(
-                "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at, duration, view_count FROM videos WHERE channel_id IN ({}) ORDER BY published_date DESC LIMIT ?{} OFFSET ?{}",
-                ph_str,
+                "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at, duration, view_count FROM videos WHERE channel_id IN ({}){} ORDER BY published_date DESC LIMIT ?{} OFFSET ?{}",
+                ph_str, short_filter,
                 ids.len() + 1,
                 ids.len() + 2,
             );
@@ -601,14 +603,17 @@ impl Database {
 
             (total, videos)
         } else {
+            let count_sql = format!("SELECT COUNT(*) FROM videos WHERE 1=1{}", short_filter);
             let total: usize = self
                 .conn
-                .query_row("SELECT COUNT(*) FROM videos", [], |row| row.get(0))
+                .query_row(&count_sql, [], |row| row.get(0))
                 .unwrap_or(0);
 
-            let mut stmt = self.conn.prepare(
-                "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at, duration, view_count FROM videos ORDER BY published_date DESC LIMIT ? OFFSET ?"
-            ).unwrap();
+            let select_sql = format!(
+                "SELECT id, title, url, is_short, channel_name, channel_id, published_date, stored_at, duration, view_count FROM videos WHERE 1=1{} ORDER BY published_date DESC LIMIT ? OFFSET ?",
+                short_filter
+            );
+            let mut stmt = self.conn.prepare(&select_sql).unwrap();
             let videos: Vec<Video> = stmt
                 .query_map(params![safe_page_size as i64, offset as i64], |row| {
                     Ok(hydrate_video(row))
@@ -1246,23 +1251,23 @@ mod tests {
         db.store_videos(&videos);
 
         let ids = vec!["ch1".to_string()];
-        let page0 = db.get_stored_videos_paginated(Some(&ids), 0, 10);
+        let page0 = db.get_stored_videos_paginated(Some(&ids), 0, 10, false);
         assert_eq!(page0.total, 25);
         assert_eq!(page0.videos.len(), 10);
         assert_eq!(page0.page, 0);
         assert_eq!(page0.page_size, 10);
 
-        let page1 = db.get_stored_videos_paginated(Some(&ids), 1, 10);
+        let page1 = db.get_stored_videos_paginated(Some(&ids), 1, 10, false);
         assert_eq!(page1.videos.len(), 10);
 
-        let page2 = db.get_stored_videos_paginated(Some(&ids), 2, 10);
+        let page2 = db.get_stored_videos_paginated(Some(&ids), 2, 10, false);
         assert_eq!(page2.videos.len(), 5);
     }
 
     #[test]
     fn test_paginated_videos_no_channels() {
         let db = test_db();
-        let result = db.get_stored_videos_paginated(Some(&[]), 0, 10);
+        let result = db.get_stored_videos_paginated(Some(&[]), 0, 10, false);
         assert_eq!(result.total, 0);
         assert!(result.videos.is_empty());
     }
@@ -1273,7 +1278,7 @@ mod tests {
         let videos = vec![make_video("v1", "ch1"), make_video("v2", "ch2")];
         db.store_videos(&videos);
 
-        let result = db.get_stored_videos_paginated(None, 0, 10);
+        let result = db.get_stored_videos_paginated(None, 0, 10, false);
         assert_eq!(result.total, 2);
         assert_eq!(result.videos.len(), 2);
     }
