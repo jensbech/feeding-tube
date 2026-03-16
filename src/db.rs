@@ -7,6 +7,13 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: i64,
+    pub name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subscription {
     pub id: String,
     pub name: String,
@@ -67,6 +74,15 @@ pub struct Database {
     db_path: PathBuf,
 }
 
+fn secure_random_token(len: usize) -> String {
+    use std::io::Read;
+    let mut bytes = vec![0u8; len];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut bytes);
+    }
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
 fn db_dir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
     home.join(".feeding-tube")
@@ -88,6 +104,8 @@ impl Database {
             db_path: PathBuf::from(":memory:"),
         };
         db.create_schema()?;
+        db.migrate_add_video_metadata()?;
+        db.migrate_multi_user()?;
         Ok(db)
     }
 
@@ -115,6 +133,7 @@ impl Database {
         db.create_schema()?;
         db.migrate_from_json()?;
         db.migrate_add_video_metadata()?;
+        db.migrate_multi_user()?;
         Ok(db)
     }
 
@@ -201,6 +220,141 @@ impl Database {
             .conn
             .execute_batch("ALTER TABLE videos ADD COLUMN view_count INTEGER;");
         self.mark_migration("add_video_metadata")?;
+        Ok(())
+    }
+
+    fn migrate_multi_user(&self) -> Result<(), String> {
+        if self.has_migration("multi_user") {
+            return Ok(());
+        }
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );"
+        ).map_err(|e| format!("Failed to create users table: {e}"))?;
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );"
+        ).map_err(|e| format!("Failed to create sessions table: {e}"))?;
+
+        let has_data: bool = self.conn
+            .query_row("SELECT COUNT(*) > 0 FROM subscriptions", [], |row| row.get(0))
+            .unwrap_or(false);
+
+        if has_data {
+            self.conn.execute(
+                "INSERT INTO users (name, role) VALUES ('Admin', 'admin')",
+                [],
+            ).map_err(|e| format!("Failed to create default admin: {e}"))?;
+            let admin_id: i64 = self.conn.last_insert_rowid();
+
+            self.conn.execute_batch(&format!(
+                "CREATE TABLE subscriptions_new (
+                    id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    user_id INTEGER NOT NULL DEFAULT {admin_id},
+                    PRIMARY KEY (id, user_id)
+                );
+                INSERT INTO subscriptions_new (id, name, url, added_at, user_id)
+                    SELECT id, name, url, added_at, {admin_id} FROM subscriptions;
+                DROP TABLE subscriptions;
+                ALTER TABLE subscriptions_new RENAME TO subscriptions;
+
+                CREATE TABLE settings_new (
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT {admin_id},
+                    PRIMARY KEY (key, user_id)
+                );
+                INSERT OR IGNORE INTO settings_new (key, value, user_id)
+                    SELECT key, value, {admin_id} FROM settings;
+                DROP TABLE settings;
+                ALTER TABLE settings_new RENAME TO settings;
+
+                CREATE TABLE channel_views_new (
+                    channel_id TEXT NOT NULL,
+                    last_viewed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    user_id INTEGER NOT NULL DEFAULT {admin_id},
+                    PRIMARY KEY (channel_id, user_id)
+                );
+                INSERT OR IGNORE INTO channel_views_new (channel_id, last_viewed_at, user_id)
+                    SELECT channel_id, last_viewed_at, {admin_id} FROM channel_views;
+                DROP TABLE channel_views;
+                ALTER TABLE channel_views_new RENAME TO channel_views;"
+            )).map_err(|e| format!("Failed to migrate tables: {e}"))?;
+
+            self.conn.execute_batch(&format!(
+                "CREATE TABLE watched_new (
+                    video_id TEXT NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT {admin_id},
+                    watched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (video_id, user_id)
+                );
+                INSERT INTO watched_new (video_id, user_id, watched_at)
+                    SELECT video_id, {admin_id}, watched_at FROM watched;
+                DROP TABLE watched;
+                ALTER TABLE watched_new RENAME TO watched;"
+            )).map_err(|e| format!("Failed to migrate watched table: {e}"))?;
+        } else {
+            self.conn.execute_batch(
+                "DROP TABLE IF EXISTS subscriptions;
+                 CREATE TABLE subscriptions (
+                    id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    user_id INTEGER NOT NULL,
+                    PRIMARY KEY (id, user_id)
+                 );
+
+                 DROP TABLE IF EXISTS watched;
+                 CREATE TABLE watched (
+                    video_id TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    watched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (video_id, user_id)
+                 );
+
+                 DROP TABLE IF EXISTS settings;
+                 CREATE TABLE settings (
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    PRIMARY KEY (key, user_id)
+                 );
+
+                 DROP TABLE IF EXISTS channel_views;
+                 CREATE TABLE channel_views (
+                    channel_id TEXT NOT NULL,
+                    last_viewed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    user_id INTEGER NOT NULL,
+                    PRIMARY KEY (channel_id, user_id)
+                 );"
+            ).map_err(|e| format!("Failed to create multi-user tables: {e}"))?;
+        }
+
+        let _ = self.conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_watched_user;
+             DROP INDEX IF EXISTS idx_subs_user;
+             DROP INDEX IF EXISTS idx_settings_user;
+             DROP INDEX IF EXISTS idx_channel_views_user;
+             CREATE INDEX idx_watched_user ON watched(user_id);
+             CREATE INDEX idx_subs_user ON subscriptions(user_id);
+             CREATE INDEX idx_settings_user ON settings(user_id);
+             CREATE INDEX idx_channel_views_user ON channel_views(user_id);"
+        );
+
+        self.mark_migration("multi_user")?;
         Ok(())
     }
 
@@ -331,14 +485,111 @@ impl Database {
         Ok(())
     }
 
-    // ── Subscriptions ──────────────────────────────────────────
+    // ── Users ────────────────────────────────────────────────
 
-    pub fn get_subscriptions(&self) -> Vec<Subscription> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, url, added_at FROM subscriptions ORDER BY name COLLATE NOCASE")
+    pub fn get_users(&self) -> Vec<User> {
+        let mut stmt = self.conn
+            .prepare("SELECT id, name, role FROM users ORDER BY id")
             .unwrap();
         stmt.query_map([], |row| {
+            Ok(User {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                role: row.get(2)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    pub fn get_user(&self, user_id: i64) -> Option<User> {
+        self.conn
+            .query_row(
+                "SELECT id, name, role FROM users WHERE id = ?",
+                params![user_id],
+                |row| Ok(User {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    role: row.get(2)?,
+                }),
+            )
+            .ok()
+    }
+
+    pub fn add_user(&self, name: &str, role: &str) -> Result<User, String> {
+        self.conn
+            .execute(
+                "INSERT INTO users (name, role) VALUES (?, ?)",
+                params![name, role],
+            )
+            .map_err(|e| format!("Failed to add user: {e}"))?;
+        let id = self.conn.last_insert_rowid();
+        Ok(User { id, name: name.to_string(), role: role.to_string() })
+    }
+
+    pub fn remove_user(&self, user_id: i64) -> Result<(), String> {
+        let rows = self.conn
+            .execute("DELETE FROM users WHERE id = ?", params![user_id])
+            .map_err(|e| format!("Failed to remove user: {e}"))?;
+        if rows == 0 {
+            return Err("User not found".to_string());
+        }
+        self.conn.execute("DELETE FROM subscriptions WHERE user_id = ?", params![user_id]).ok();
+        self.conn.execute("DELETE FROM watched WHERE user_id = ?", params![user_id]).ok();
+        self.conn.execute("DELETE FROM settings WHERE user_id = ?", params![user_id]).ok();
+        self.conn.execute("DELETE FROM channel_views WHERE user_id = ?", params![user_id]).ok();
+        self.conn.execute("DELETE FROM sessions WHERE user_id = ?", params![user_id]).ok();
+        Ok(())
+    }
+
+    // ── Sessions ──────────────────────────────────────────────
+
+    pub fn create_session(&self, user_id: i64) -> String {
+        let token = secure_random_token(32);
+        let _ = self.conn.execute(
+            "INSERT INTO sessions (token, user_id) VALUES (?, ?)",
+            params![token, user_id],
+        );
+        token
+    }
+
+    pub fn get_session_user(&self, token: &str) -> Option<User> {
+        let max_age_secs = 7 * 24 * 3600; // 7 days
+        self.conn
+            .query_row(
+                "SELECT u.id, u.name, u.role FROM sessions s JOIN users u ON s.user_id = u.id
+                 WHERE s.token = ? AND (julianday('now') - julianday(s.created_at)) * 86400 < ?",
+                params![token, max_age_secs],
+                |row| Ok(User {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    role: row.get(2)?,
+                }),
+            )
+            .ok()
+    }
+
+    pub fn delete_session(&self, token: &str) {
+        let _ = self.conn.execute("DELETE FROM sessions WHERE token = ?", params![token]);
+    }
+
+    pub fn cleanup_expired_sessions(&self) {
+        let max_age_secs = 7 * 24 * 3600;
+        let _ = self.conn.execute(
+            "DELETE FROM sessions WHERE (julianday('now') - julianday(created_at)) * 86400 >= ?",
+            params![max_age_secs],
+        );
+    }
+
+    // ── Subscriptions ──────────────────────────────────────────
+
+    pub fn get_subscriptions(&self, user_id: i64) -> Vec<Subscription> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, url, added_at FROM subscriptions WHERE user_id = ? ORDER BY name COLLATE NOCASE")
+            .unwrap();
+        stmt.query_map(params![user_id], |row| {
             Ok(Subscription {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -351,12 +602,12 @@ impl Database {
         .collect()
     }
 
-    pub fn add_subscription(&self, sub: &Subscription) -> Result<(), String> {
+    pub fn add_subscription(&self, sub: &Subscription, user_id: i64) -> Result<(), String> {
         let exists: bool = self
             .conn
             .query_row(
-                "SELECT 1 FROM subscriptions WHERE id = ? OR url = ?",
-                params![sub.id, sub.url],
+                "SELECT 1 FROM subscriptions WHERE (id = ? OR url = ?) AND user_id = ?",
+                params![sub.id, sub.url, user_id],
                 |_| Ok(true),
             )
             .unwrap_or(false);
@@ -367,17 +618,17 @@ impl Database {
 
         self.conn
             .execute(
-                "INSERT INTO subscriptions (id, name, url) VALUES (?, ?, ?)",
-                params![sub.id, sub.name, sub.url],
+                "INSERT INTO subscriptions (id, name, url, user_id) VALUES (?, ?, ?, ?)",
+                params![sub.id, sub.name, sub.url, user_id],
             )
             .map_err(|e| format!("Failed to add subscription: {e}"))?;
         Ok(())
     }
 
-    pub fn remove_subscription(&self, id: &str) -> Result<(), String> {
+    pub fn remove_subscription(&self, id: &str, user_id: i64) -> Result<(), String> {
         let rows = self
             .conn
-            .execute("DELETE FROM subscriptions WHERE id = ?", params![id])
+            .execute("DELETE FROM subscriptions WHERE id = ? AND user_id = ?", params![id, user_id])
             .map_err(|e| format!("Failed to remove: {e}"))?;
         if rows == 0 {
             return Err("Subscription not found".to_string());
@@ -387,14 +638,14 @@ impl Database {
 
     // ── Settings ───────────────────────────────────────────────
 
-    pub fn get_settings(&self) -> Settings {
+    pub fn get_settings(&self, user_id: i64) -> Settings {
         let mut settings = Settings::default();
         let mut stmt = self
             .conn
-            .prepare("SELECT key, value FROM settings")
+            .prepare("SELECT key, value FROM settings WHERE user_id = ?")
             .unwrap();
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(params![user_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -431,67 +682,71 @@ impl Database {
         settings
     }
 
-    pub fn update_setting(&self, key: &str, value: &str) {
+    pub fn update_setting(&self, key: &str, value: &str, user_id: i64) {
         let _ = self.conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            params![key, value],
+            "DELETE FROM settings WHERE key = ? AND user_id = ?",
+            params![key, user_id],
+        );
+        let _ = self.conn.execute(
+            "INSERT INTO settings (key, value, user_id) VALUES (?, ?, ?)",
+            params![key, value, user_id],
         );
     }
 
     // ── Watched ────────────────────────────────────────────────
 
-    pub fn mark_as_watched(&self, video_id: &str) {
+    pub fn mark_as_watched(&self, video_id: &str, user_id: i64) {
         let _ = self.conn.execute(
-            "INSERT OR REPLACE INTO watched (video_id) VALUES (?)",
-            params![video_id],
+            "INSERT OR REPLACE INTO watched (video_id, user_id) VALUES (?, ?)",
+            params![video_id, user_id],
         );
     }
 
-    pub fn get_watched_ids(&self) -> HashSet<String> {
+    pub fn get_watched_ids(&self, user_id: i64) -> HashSet<String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT video_id FROM watched")
+            .prepare("SELECT video_id FROM watched WHERE user_id = ?")
             .unwrap();
-        stmt.query_map([], |row| row.get(0))
+        stmt.query_map(params![user_id], |row| row.get(0))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect()
     }
 
-    pub fn toggle_watched(&self, video_id: &str) -> bool {
+    pub fn toggle_watched(&self, video_id: &str, user_id: i64) -> bool {
         let exists: bool = self
             .conn
             .query_row(
-                "SELECT 1 FROM watched WHERE video_id = ?",
-                params![video_id],
+                "SELECT 1 FROM watched WHERE video_id = ? AND user_id = ?",
+                params![video_id, user_id],
                 |_| Ok(true),
             )
             .unwrap_or(false);
 
         if exists {
             let _ = self.conn.execute(
-                "DELETE FROM watched WHERE video_id = ?",
-                params![video_id],
+                "DELETE FROM watched WHERE video_id = ? AND user_id = ?",
+                params![video_id, user_id],
             );
             false
         } else {
             let _ = self.conn.execute(
-                "INSERT INTO watched (video_id) VALUES (?)",
-                params![video_id],
+                "INSERT INTO watched (video_id, user_id) VALUES (?, ?)",
+                params![video_id, user_id],
             );
             true
         }
     }
 
-    pub fn mark_channel_all_watched(&self, video_ids: &[String]) -> usize {
+    pub fn mark_channel_all_watched(&self, video_ids: &[String], user_id: i64) -> usize {
         if video_ids.is_empty() {
             return 0;
         }
         let mut count = 0;
         for id in video_ids {
             let result = self.conn.execute(
-                "INSERT OR IGNORE INTO watched (video_id) VALUES (?)",
-                params![id],
+                "INSERT OR IGNORE INTO watched (video_id, user_id) VALUES (?, ?)",
+                params![id, user_id],
             );
             if let Ok(rows) = result {
                 count += rows;
@@ -635,25 +890,33 @@ impl Database {
 
     // ── Channel Views ──────────────────────────────────────────
 
-    pub fn update_channel_last_viewed(&self, channel_id: &str) {
+    pub fn update_channel_last_viewed(&self, channel_id: &str, user_id: i64) {
         let now = Utc::now().to_rfc3339();
         let _ = self.conn.execute(
-            "INSERT OR REPLACE INTO channel_views (channel_id, last_viewed_at) VALUES (?, ?)",
-            params![channel_id, now],
+            "DELETE FROM channel_views WHERE channel_id = ? AND user_id = ?",
+            params![channel_id, user_id],
+        );
+        let _ = self.conn.execute(
+            "INSERT INTO channel_views (channel_id, last_viewed_at, user_id) VALUES (?, ?, ?)",
+            params![channel_id, now, user_id],
         );
     }
 
-    pub fn mark_all_channels_viewed(&self, channel_ids: &[String]) {
+    pub fn mark_all_channels_viewed(&self, channel_ids: &[String], user_id: i64) {
         let now = Utc::now().to_rfc3339();
         for id in channel_ids {
             let _ = self.conn.execute(
-                "INSERT OR REPLACE INTO channel_views (channel_id, last_viewed_at) VALUES (?, ?)",
-                params![id, now],
+                "DELETE FROM channel_views WHERE channel_id = ? AND user_id = ?",
+                params![id, user_id],
+            );
+            let _ = self.conn.execute(
+                "INSERT INTO channel_views (channel_id, last_viewed_at, user_id) VALUES (?, ?, ?)",
+                params![id, now, user_id],
             );
         }
     }
 
-    pub fn get_new_video_counts(&self, hide_shorts: bool) -> HashMap<String, usize> {
+    pub fn get_new_video_counts(&self, hide_shorts: bool, user_id: i64) -> HashMap<String, usize> {
         let short_filter = if hide_shorts {
             "AND v.is_short = 0"
         } else {
@@ -662,43 +925,15 @@ impl Database {
         let now = Utc::now().to_rfc3339();
         let sql = format!(
             "SELECT v.channel_id, COUNT(*) as count FROM videos v
-             LEFT JOIN channel_views cv ON v.channel_id = cv.channel_id
+             LEFT JOIN channel_views cv ON v.channel_id = cv.channel_id AND cv.user_id = ?1
              WHERE v.published_date IS NOT NULL AND v.channel_id IS NOT NULL {}
                AND (cv.last_viewed_at IS NULL OR v.published_date > cv.last_viewed_at)
-               AND v.published_date <= ?
+               AND v.published_date <= ?2
              GROUP BY v.channel_id",
             short_filter
         );
         let mut stmt = self.conn.prepare(&sql).unwrap();
-        stmt.query_map(params![now], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, usize>(1)?,
-            ))
-        })
-        .unwrap()
-        .filter_map(|r| r.ok())
-        .collect()
-    }
-
-    pub fn get_upcoming_video_counts(&self, hide_shorts: bool) -> HashMap<String, usize> {
-        let short_filter = if hide_shorts {
-            "AND v.is_short = 0"
-        } else {
-            ""
-        };
-        let now = Utc::now().to_rfc3339();
-        let sql = format!(
-            "SELECT v.channel_id, COUNT(*) as count FROM videos v
-             LEFT JOIN watched w ON v.id = w.video_id
-             WHERE v.published_date IS NOT NULL AND v.channel_id IS NOT NULL {}
-               AND v.published_date > ?
-               AND w.video_id IS NULL
-             GROUP BY v.channel_id",
-            short_filter
-        );
-        let mut stmt = self.conn.prepare(&sql).unwrap();
-        stmt.query_map(params![now], |row| {
+        stmt.query_map(params![user_id, now], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, usize>(1)?,
@@ -733,20 +968,21 @@ impl Database {
         .collect()
     }
 
-    pub fn get_fully_watched_channels(&self, hide_shorts: bool) -> HashSet<String> {
+    pub fn get_fully_watched_channels(&self, hide_shorts: bool, user_id: i64) -> HashSet<String> {
         let short_filter = if hide_shorts {
-            "WHERE v.is_short = 0"
+            "AND v.is_short = 0"
         } else {
             ""
         };
         let sql = format!(
             "SELECT v.channel_id, COUNT(*) as total, SUM(CASE WHEN w.video_id IS NOT NULL THEN 1 ELSE 0 END) as watched
-             FROM videos v LEFT JOIN watched w ON v.id = w.video_id {}
+             FROM videos v LEFT JOIN watched w ON v.id = w.video_id AND w.user_id = ?
+             WHERE 1=1 {}
              GROUP BY v.channel_id HAVING total > 0 AND total = watched",
             short_filter
         );
         let mut stmt = self.conn.prepare(&sql).unwrap();
-        stmt.query_map([], |row| row.get::<_, String>(0))
+        stmt.query_map(params![user_id], |row| row.get::<_, String>(0))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect()
@@ -1070,9 +1306,9 @@ mod tests {
     fn test_add_and_get_subscriptions() {
         let db = test_db();
         let sub = make_sub("ch1", "Channel One");
-        db.add_subscription(&sub).unwrap();
+        db.add_subscription(&sub, 1).unwrap();
 
-        let subs = db.get_subscriptions();
+        let subs = db.get_subscriptions(1);
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].name, "Channel One");
         assert_eq!(subs[0].id, "ch1");
@@ -1082,8 +1318,8 @@ mod tests {
     fn test_add_duplicate_subscription() {
         let db = test_db();
         let sub = make_sub("ch1", "Channel One");
-        db.add_subscription(&sub).unwrap();
-        let result = db.add_subscription(&sub);
+        db.add_subscription(&sub, 1).unwrap();
+        let result = db.add_subscription(&sub, 1);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("already exists"));
     }
@@ -1092,28 +1328,28 @@ mod tests {
     fn test_remove_subscription() {
         let db = test_db();
         let sub = make_sub("ch1", "Channel One");
-        db.add_subscription(&sub).unwrap();
-        db.remove_subscription("ch1").unwrap();
+        db.add_subscription(&sub, 1).unwrap();
+        db.remove_subscription("ch1", 1).unwrap();
 
-        let subs = db.get_subscriptions();
+        let subs = db.get_subscriptions(1);
         assert_eq!(subs.len(), 0);
     }
 
     #[test]
     fn test_remove_nonexistent_subscription() {
         let db = test_db();
-        let result = db.remove_subscription("nonexistent");
+        let result = db.remove_subscription("nonexistent", 1);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_subscriptions_ordered_case_insensitive() {
         let db = test_db();
-        db.add_subscription(&make_sub("c1", "Zeta")).unwrap();
-        db.add_subscription(&make_sub("c2", "alpha")).unwrap();
-        db.add_subscription(&make_sub("c3", "Beta")).unwrap();
+        db.add_subscription(&make_sub("c1", "Zeta"), 1).unwrap();
+        db.add_subscription(&make_sub("c2", "alpha"), 1).unwrap();
+        db.add_subscription(&make_sub("c3", "Beta"), 1).unwrap();
 
-        let subs = db.get_subscriptions();
+        let subs = db.get_subscriptions(1);
         assert_eq!(subs[0].name, "alpha");
         assert_eq!(subs[1].name, "Beta");
         assert_eq!(subs[2].name, "Zeta");
@@ -1156,11 +1392,11 @@ mod tests {
     #[test]
     fn test_watched_operations() {
         let db = test_db();
-        let ids = db.get_watched_ids();
+        let ids = db.get_watched_ids(1);
         assert!(ids.is_empty());
 
-        db.mark_as_watched("v1");
-        let ids = db.get_watched_ids();
+        db.mark_as_watched("v1", 1);
+        let ids = db.get_watched_ids(1);
         assert!(ids.contains("v1"));
         assert_eq!(ids.len(), 1);
     }
@@ -1169,41 +1405,41 @@ mod tests {
     fn test_toggle_watched() {
         let db = test_db();
 
-        let now_watched = db.toggle_watched("v1");
+        let now_watched = db.toggle_watched("v1", 1);
         assert!(now_watched);
-        assert!(db.get_watched_ids().contains("v1"));
+        assert!(db.get_watched_ids(1).contains("v1"));
 
-        let now_watched = db.toggle_watched("v1");
+        let now_watched = db.toggle_watched("v1", 1);
         assert!(!now_watched);
-        assert!(!db.get_watched_ids().contains("v1"));
+        assert!(!db.get_watched_ids(1).contains("v1"));
     }
 
     #[test]
     fn test_mark_channel_all_watched() {
         let db = test_db();
         let ids = vec!["v1".to_string(), "v2".to_string(), "v3".to_string()];
-        let count = db.mark_channel_all_watched(&ids);
+        let count = db.mark_channel_all_watched(&ids, 1);
         assert_eq!(count, 3);
 
-        let watched = db.get_watched_ids();
+        let watched = db.get_watched_ids(1);
         assert_eq!(watched.len(), 3);
 
         // Marking again should add 0
-        let count = db.mark_channel_all_watched(&ids);
+        let count = db.mark_channel_all_watched(&ids, 1);
         assert_eq!(count, 0);
     }
 
     #[test]
     fn test_mark_channel_all_watched_empty() {
         let db = test_db();
-        let count = db.mark_channel_all_watched(&[]);
+        let count = db.mark_channel_all_watched(&[], 1);
         assert_eq!(count, 0);
     }
 
     #[test]
     fn test_settings_defaults() {
         let db = test_db();
-        let settings = db.get_settings();
+        let settings = db.get_settings(1);
         assert_eq!(settings.player, "mpv");
         assert_eq!(settings.videos_per_channel, 15);
         assert!(settings.hide_shorts);
@@ -1213,10 +1449,10 @@ mod tests {
     #[test]
     fn test_update_and_get_settings() {
         let db = test_db();
-        db.update_setting("player", "\"vlc\"");
-        db.update_setting("hideShorts", "false");
+        db.update_setting("player", "\"vlc\"", 1);
+        db.update_setting("hideShorts", "false", 1);
 
-        let settings = db.get_settings();
+        let settings = db.get_settings(1);
         assert_eq!(settings.player, "vlc");
         assert!(!settings.hide_shorts);
     }
@@ -1224,18 +1460,15 @@ mod tests {
     #[test]
     fn test_max_resolution_setting() {
         let db = test_db();
-        // Default is 1080
-        let settings = db.get_settings();
+        let settings = db.get_settings(1);
         assert_eq!(settings.max_resolution, "1080");
 
-        // Update to max
-        db.update_setting("maxResolution", "\"max\"");
-        let settings = db.get_settings();
+        db.update_setting("maxResolution", "\"max\"", 1);
+        let settings = db.get_settings(1);
         assert_eq!(settings.max_resolution, "max");
 
-        // Update back to 1080
-        db.update_setting("maxResolution", "\"1080\"");
-        let settings = db.get_settings();
+        db.update_setting("maxResolution", "\"1080\"", 1);
+        let settings = db.get_settings(1);
         assert_eq!(settings.max_resolution, "1080");
     }
 
@@ -1286,7 +1519,7 @@ mod tests {
     #[test]
     fn test_channel_views() {
         let db = test_db();
-        db.add_subscription(&make_sub("ch1", "Channel")).unwrap();
+        db.add_subscription(&make_sub("ch1", "Channel"), 1).unwrap();
 
         // Store a video with a recent date
         let mut video = make_video("v1", "ch1");
@@ -1294,12 +1527,11 @@ mod tests {
         db.store_videos(&[video]);
 
         // Before viewing, should have new count
-        let counts = db.get_new_video_counts(false);
+        let counts = db.get_new_video_counts(false, 1);
         assert!(counts.get("ch1").copied().unwrap_or(0) > 0);
 
-        // After viewing, the count should be 0 (video published before last_viewed)
-        db.update_channel_last_viewed("ch1");
-        let counts = db.get_new_video_counts(false);
+        db.update_channel_last_viewed("ch1", 1);
+        let counts = db.get_new_video_counts(false, 1);
         assert_eq!(counts.get("ch1").copied().unwrap_or(0), 0);
     }
 
@@ -1307,10 +1539,9 @@ mod tests {
     fn test_mark_all_channels_viewed() {
         let db = test_db();
         let ids = vec!["ch1".to_string(), "ch2".to_string()];
-        db.mark_all_channels_viewed(&ids);
+        db.mark_all_channels_viewed(&ids, 1);
 
-        // Should not have new counts (no videos exist yet)
-        let counts = db.get_new_video_counts(false);
+        let counts = db.get_new_video_counts(false, 1);
         assert!(counts.is_empty());
     }
 
@@ -1320,14 +1551,12 @@ mod tests {
         let videos = vec![make_video("v1", "ch1"), make_video("v2", "ch1")];
         db.store_videos(&videos);
 
-        // Not watched yet
-        let fully = db.get_fully_watched_channels(false);
+        let fully = db.get_fully_watched_channels(false, 1);
         assert!(!fully.contains("ch1"));
 
-        // Watch all
-        db.mark_as_watched("v1");
-        db.mark_as_watched("v2");
-        let fully = db.get_fully_watched_channels(false);
+        db.mark_as_watched("v1", 1);
+        db.mark_as_watched("v2", 1);
+        let fully = db.get_fully_watched_channels(false, 1);
         assert!(fully.contains("ch1"));
     }
 
@@ -1339,13 +1568,11 @@ mod tests {
         v2.is_short = true;
         db.store_videos(&[v1, v2]);
 
-        // Watch only the non-short
-        db.mark_as_watched("v1");
-        let fully = db.get_fully_watched_channels(true);
+        db.mark_as_watched("v1", 1);
+        let fully = db.get_fully_watched_channels(true, 1);
         assert!(fully.contains("ch1"));
 
-        // With shorts shown, not fully watched
-        let fully = db.get_fully_watched_channels(false);
+        let fully = db.get_fully_watched_channels(false, 1);
         assert!(!fully.contains("ch1"));
     }
 

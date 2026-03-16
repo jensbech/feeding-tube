@@ -112,10 +112,11 @@ pub struct App {
 
 impl App {
     pub fn new(db: Database) -> Self {
-        let settings = db.get_settings();
+        let tui_user_id: i64 = 1;
+        let settings = db.get_settings(tui_user_id);
         let hide_shorts = settings.hide_shorts;
         let max_resolution = settings.max_resolution.clone();
-        let watched_ids = db.get_watched_ids();
+        let watched_ids = db.get_watched_ids(tui_user_id);
 
         App {
             db,
@@ -170,19 +171,18 @@ impl App {
     // ── Initialization ─────────────────────────────────────
 
     pub fn load_subscriptions(&mut self) {
-        self.subscriptions = self.db.get_subscriptions();
+        self.subscriptions = self.db.get_subscriptions(1);
         self.refresh_counts();
     }
 
     pub fn refresh_counts(&mut self) {
-        self.new_counts = self.db.get_new_video_counts(self.hide_shorts);
-        self.upcoming_counts = self.db.get_upcoming_video_counts(self.hide_shorts);
+        self.new_counts = self.db.get_new_video_counts(self.hide_shorts, 1);
         self.channel_stats = self.db.get_channel_stats(self.hide_shorts);
-        self.fully_watched = self.db.get_fully_watched_channels(self.hide_shorts);
+        self.fully_watched = self.db.get_fully_watched_channels(self.hide_shorts, 1);
     }
 
     pub fn refresh_watched(&mut self) {
-        self.watched_ids = self.db.get_watched_ids();
+        self.watched_ids = self.db.get_watched_ids(1);
     }
 
     // ── Status Messages ────────────────────────────────────
@@ -390,6 +390,7 @@ impl App {
         self.db.update_setting(
             "hideShorts",
             &serde_json::to_string(&self.hide_shorts).unwrap(),
+            1,
         );
         if self.hide_shorts {
             self.set_message("Hiding Shorts");
@@ -405,12 +406,12 @@ impl App {
         if self.max_resolution == "1080" {
             self.max_resolution = "max".to_string();
             self.db
-                .update_setting("maxResolution", &serde_json::to_string("max").unwrap());
+                .update_setting("maxResolution", &serde_json::to_string("max").unwrap(), 1);
             self.set_message("Resolution: unlimited");
         } else {
             self.max_resolution = "1080".to_string();
             self.db
-                .update_setting("maxResolution", &serde_json::to_string("1080").unwrap());
+                .update_setting("maxResolution", &serde_json::to_string("1080").unwrap(), 1);
             self.set_message("Resolution: 1080p max");
         }
     }
@@ -422,7 +423,7 @@ impl App {
         let selected = self.current_selected();
         if let Some(video) = filtered.get(selected) {
             let video_id = video.id.clone();
-            let now_watched = self.db.toggle_watched(&video_id);
+            let now_watched = self.db.toggle_watched(&video_id, 1);
             self.refresh_watched();
             if now_watched {
                 self.set_message("Marked as watched");
@@ -444,8 +445,8 @@ impl App {
             } else {
                 videos.iter().map(|v| v.id.clone()).collect()
             };
-            let count = self.db.mark_channel_all_watched(&video_ids);
-            self.db.update_channel_last_viewed(&channel_id);
+            let count = self.db.mark_channel_all_watched(&video_ids, 1);
+            self.db.update_channel_last_viewed(&channel_id, 1);
             self.refresh_counts();
             self.refresh_watched();
             let name = self.filtered_subscriptions()
@@ -688,7 +689,7 @@ mod tests {
             url: "https://youtube.com/channel/ch1".to_string(),
             added_at: None,
         };
-        app.db.add_subscription(&sub).unwrap();
+        app.db.add_subscription(&sub, 1).unwrap();
         app.load_subscriptions();
 
         let filtered = app.filtered_subscriptions();
@@ -703,13 +704,13 @@ mod tests {
             name: "Foo Bar".to_string(),
             url: "https://youtube.com/channel/ch1".to_string(),
             added_at: None,
-        }).unwrap();
+        }, 1).unwrap();
         app.db.add_subscription(&crate::db::Subscription {
             id: "ch2".to_string(),
             name: "Baz Qux".to_string(),
             url: "https://youtube.com/channel/ch2".to_string(),
             added_at: None,
-        }).unwrap();
+        }, 1).unwrap();
         app.load_subscriptions();
         app.filter_text = "foo".to_string();
 
@@ -819,7 +820,7 @@ mod tests {
             name: "Test".to_string(),
             url: "https://youtube.com/channel/ch1".to_string(),
             added_at: None,
-        }).unwrap();
+        }, 1).unwrap();
         app.load_subscriptions();
         app.saved_channel_index = 10; // larger than subscription count
         app.navigate_back();

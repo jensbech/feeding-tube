@@ -68,7 +68,7 @@ async fn handle_add(url: &str) {
                 url: info.url.clone(),
                 added_at: None,
             };
-            match db.add_subscription(&sub) {
+            match db.add_subscription(&sub, 1) {
                 Ok(()) => {
                     println!("Added: {}", info.name);
                     print!("Prime historical videos? (Y/n) ");
@@ -108,7 +108,7 @@ async fn handle_add(url: &str) {
 
 fn handle_list() {
     let db = Database::open().expect("Failed to open database");
-    let subs = db.get_subscriptions();
+    let subs = db.get_subscriptions(1);
     if subs.is_empty() {
         println!("No subscriptions yet. Use --add <url> to add one.");
         return;
@@ -122,7 +122,7 @@ fn handle_list() {
 
 async fn handle_prime(query: Option<String>) {
     let db = Database::open().expect("Failed to open database");
-    let subs = db.get_subscriptions();
+    let subs = db.get_subscriptions(1);
     if subs.is_empty() {
         println!("No subscriptions yet. Use --add <url> to add one.");
         return;
@@ -429,7 +429,7 @@ async fn handle_key_event(
             match key {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                     let ids: Vec<String> = app.subscriptions.iter().map(|s| s.id.clone()).collect();
-                    app.db.mark_all_channels_viewed(&ids);
+                    app.db.mark_all_channels_viewed(&ids, 1);
                     app.new_counts.clear();
                     app.set_message("Marked all channels as read");
                     app.mode = Mode::List;
@@ -444,7 +444,7 @@ async fn handle_key_event(
             match key {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                     let ids: Vec<String> = app.videos.iter().map(|v| v.id.clone()).collect();
-                    let count = app.db.mark_channel_all_watched(&ids);
+                    let count = app.db.mark_channel_all_watched(&ids, 1);
                     app.refresh_watched();
                     app.set_message(&format!("Marked {} videos as watched", count));
                     app.mode = Mode::List;
@@ -516,7 +516,7 @@ async fn handle_channel_keys(
                 let filtered = app.filtered_subscriptions();
                 let channel = filtered[app.channel_selected].clone();
                 let idx = app.channel_selected;
-                app.db.update_channel_last_viewed(&channel.id);
+                app.db.update_channel_last_viewed(&channel.id, 1);
                 app.new_counts.remove(&channel.id);
                 app.navigate_to_videos(Some(channel), idx);
                 load_videos_for_screen(app).await;
@@ -776,7 +776,7 @@ async fn handle_add_channel(
                 url: info.url.clone(),
                 added_at: None,
             };
-            match app.db.add_subscription(&sub) {
+            match app.db.add_subscription(&sub, 1) {
                 Ok(()) => {
                     app.load_subscriptions();
                     app.set_message(&format!("Added: {}", info.name));
@@ -803,7 +803,7 @@ fn handle_delete_channel(app: &mut App) {
     if let Some(sub) = filtered.get(app.channel_selected) {
         let id = sub.id.clone();
         let name = sub.name.clone();
-        match app.db.remove_subscription(&id) {
+        match app.db.remove_subscription(&id, 1) {
             Ok(()) => {
                 app.load_subscriptions();
                 app.set_message(&format!("Removed: {}", name));
@@ -1058,7 +1058,7 @@ async fn handle_play_video(app: &mut App) {
         let title = video.title.clone();
 
         // Mark as watched BEFORE launching player (matching JS behavior)
-        app.db.mark_as_watched(&id);
+        app.db.mark_as_watched(&id, 1);
         app.refresh_watched();
 
         app.playing = true;
@@ -1089,7 +1089,7 @@ async fn handle_play_search_result(app: &mut App) {
         let title = video.title.clone();
 
         // Mark as watched BEFORE launching player (matching JS behavior)
-        app.db.mark_as_watched(&id);
+        app.db.mark_as_watched(&id, 1);
         app.refresh_watched();
 
         app.playing = true;
@@ -1178,7 +1178,7 @@ fn handle_subscribe_from_search(app: &mut App) {
     let filtered = app.filtered_videos();
     if let Some(video) = filtered.get(app.search_selected) {
         if let Some(ref channel_id) = video.channel_id {
-            let subs = app.db.get_subscriptions();
+            let subs = app.db.get_subscriptions(1);
             if subs.iter().any(|s| s.id == *channel_id) {
                 let name = video.channel_name.as_deref().unwrap_or("?");
                 app.set_message(&format!("Already subscribed to {}", name));
@@ -1193,7 +1193,7 @@ fn handle_subscribe_from_search(app: &mut App) {
                     url: format!("https://www.youtube.com/channel/{}", channel_id),
                     added_at: None,
                 };
-                match app.db.add_subscription(&sub) {
+                match app.db.add_subscription(&sub, 1) {
                     Ok(()) => {
                         app.load_subscriptions();
                         app.set_message(&format!("Added: {}", sub.name));
@@ -1236,7 +1236,7 @@ async fn load_videos_for_screen(app: &mut App) {
         app.total_videos = app.videos.len();
     } else {
         // All videos view
-        let subs = app.db.get_subscriptions();
+        let subs = app.db.get_subscriptions(1);
         if subs.is_empty() {
             app.videos.clear();
             app.total_videos = 0;
@@ -1296,7 +1296,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let initial_channel = if let Some(index) = cli.channel {
         let db = Database::open()?;
-        let subs = db.get_subscriptions();
+        let subs = db.get_subscriptions(1);
         let idx = index.saturating_sub(1);
         if idx >= subs.len() {
             eprintln!(

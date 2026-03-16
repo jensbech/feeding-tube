@@ -389,31 +389,12 @@ input:focus { border-color: var(--accent); }
 .btn-watch:hover { color: var(--accent); }
 .btn-watch.is-watched { color: var(--green); font-weight: 700; }
 
-.video-table tr {
-  position: relative;
-  overflow: hidden;
+@keyframes swipe-confirm {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.8); }
+  100% { transform: scale(1); }
 }
-
-.swipe-bg {
-  display: none;
-  position: absolute;
-  top: 0; bottom: 0; right: 0;
-  width: 60px;
-  z-index: 0;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  color: #fff;
-  pointer-events: none;
-  border-radius: 4px 0 0 4px;
-}
-
-.swipe-bg.watched-bg { background: rgba(99, 186, 60, 0.3); color: var(--green); }
-.swipe-bg.unwatched-bg { background: rgba(120, 120, 140, 0.3); color: var(--gray); }
-
-.video-table tr td { position: relative; z-index: 1; background: var(--bg); transition: transform 0.15s ease; }
-.video-table tr.watched td { background: var(--bg); }
-.video-table tr.swiping td { transition: none; }
+.btn-watch.swipe-pop { animation: swipe-confirm 0.35s ease; }
 
 .pagination {
   display: flex;
@@ -752,15 +733,160 @@ tr.kb-focus .video-title { color: var(--cyan); }
 @media (max-width: 768px) {
   .kbd-help { display: none; }
 }
+.login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.login-card {
+  background: var(--card);
+  border: 1px solid var(--highlight);
+  border-radius: 12px;
+  padding: 40px;
+  text-align: center;
+  max-width: 360px;
+  width: 90%;
+}
+
+.login-card h1 {
+  font-size: 24px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.login-card p {
+  font-size: 13px;
+  color: var(--gray);
+  margin-bottom: 24px;
+}
+
+.login-users {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.login-user-btn {
+  background: var(--highlight);
+  color: var(--light-gray);
+  padding: 14px;
+  font-size: 15px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-user-btn:hover { background: var(--accent); color: var(--bg); }
+
+.login-user-btn .user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.login-user-btn:hover .user-avatar { background: var(--bg); color: var(--accent); }
+
+.login-user-btn .user-name { flex: 1; text-align: left; }
+.login-user-btn .user-role { font-size: 11px; color: var(--gray); }
+.login-user-btn:hover .user-role { color: var(--bg); opacity: 0.7; }
+
+.login-no-users { color: var(--gray); font-size: 13px; padding: 20px 0; }
+
+.user-menu-btn {
+  background: none;
+  color: var(--gray);
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.user-menu-btn:hover { color: var(--accent); }
+
+.admin-panel {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  width: 320px;
+  background: var(--card);
+  border-left: 1px solid var(--highlight);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+}
+.admin-panel.open { transform: translateX(0); }
+
+.admin-panel-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--highlight);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.admin-panel-header h3 { font-size: 14px; color: var(--accent); }
+
+.admin-user-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.admin-user-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--highlight);
+}
+
+.admin-user-item .user-info { font-size: 13px; }
+.admin-user-item .user-info .role { font-size: 11px; color: var(--gray); margin-left: 6px; }
+
+.admin-add-form {
+  padding: 12px;
+  border-top: 1px solid var(--highlight);
+  display: flex;
+  gap: 8px;
+}
+.admin-add-form input { flex: 1; }
+.admin-add-form button { background: var(--accent); color: var(--bg); }
+
+.btn-remove-user {
+  background: none;
+  color: var(--red);
+  font-size: 16px;
+  padding: 4px 8px;
+}
 </style>
 </head>
 <body>
 
 <div class="toast-container" id="toasts"></div>
 
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <h1>FeedingTube</h1>
+    <p>Choose your profile</p>
+    <div class="login-users" id="loginUsers"></div>
+    <div class="login-no-users" id="loginNoUsers" style="display:none;">No users yet. Create one in the admin panel.</div>
+  </div>
+</div>
+
 <div class="mobile-sidebar-overlay" id="sidebarOverlay"></div>
 
-<div class="layout">
+<div class="layout" id="appLayout" style="display:none;">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-title-row">
@@ -804,6 +930,7 @@ tr.kb-focus .video-title { color: var(--cyan); }
           &#8635;
           <span class="btn-label">Refresh</span>
         </button>
+        <button class="user-menu-btn" id="userMenuBtn" title="User"></button>
       </div>
     </header>
 
@@ -828,6 +955,21 @@ tr.kb-focus .video-title { color: var(--cyan); }
   </div>
 </div>
 
+<div class="admin-panel" id="adminPanel">
+  <div class="admin-panel-header">
+    <h3>Users</h3>
+    <div>
+      <button class="user-menu-btn" id="adminLogout" style="color:var(--red);">Log out</button>
+      <button class="modal-close" id="adminClose">&times;</button>
+    </div>
+  </div>
+  <div class="admin-user-list" id="adminUserList"></div>
+  <form class="admin-add-form" id="adminAddForm">
+    <input type="text" placeholder="Name..." id="adminNewName" autocomplete="off">
+    <button type="submit">Add</button>
+  </form>
+</div>
+
 <script>
 const state = {
   channels: [],
@@ -845,6 +987,7 @@ const state = {
   sortUnwatchedFirst: true,
   focusedRow: -1,
   bgPlay: false,
+  currentUser: null,
 };
 
 function toast(msg, type = '') {
@@ -1564,86 +1707,60 @@ let touchStartY = 0;
 let swipeRow = null;
 let swipeStartX = 0;
 let swipeStartY = 0;
-let swipeLocked = false;
+let swipeDirection = null;
 
 document.addEventListener('touchstart', (e) => {
   touchStartX = e.touches[0].clientX;
   touchStartY = e.touches[0].clientY;
-
-  const row = e.target.closest('.video-table tr[data-vid]');
-  if (row) {
-    swipeRow = row;
-    swipeStartX = e.touches[0].clientX;
-    swipeStartY = e.touches[0].clientY;
-    swipeLocked = false;
-    if (!row.querySelector('.swipe-bg')) {
-      const bg = document.createElement('div');
-      bg.className = 'swipe-bg';
-      row.insertBefore(bg, row.firstChild);
-    }
-  } else {
-    swipeRow = null;
-  }
+  swipeStartX = e.touches[0].clientX;
+  swipeStartY = e.touches[0].clientY;
+  swipeDirection = null;
+  swipeRow = e.target.closest('.video-table tr[data-vid]') || null;
 }, { passive: true });
 
 document.addEventListener('touchmove', (e) => {
-  if (!swipeRow) return;
-  const dx = e.touches[0].clientX - swipeStartX;
-  const dy = e.touches[0].clientY - swipeStartY;
-  if (!swipeLocked && Math.abs(dy) > Math.abs(dx)) {
-    swipeRow = null;
-    return;
-  }
-  swipeLocked = true;
-  const isWatched = state.watchedIds.has(swipeRow.dataset.vid);
-  const swipeBg = swipeRow.querySelector('.swipe-bg');
-  if (dx < -30) {
-    swipeRow.classList.add('swiping');
-    swipeRow.querySelectorAll('td').forEach(td => td.style.transform = `translateX(${dx}px)`);
-    if (swipeBg) {
-      swipeBg.style.display = 'flex';
-      swipeBg.className = 'swipe-bg ' + (isWatched ? 'unwatched-bg' : 'watched-bg');
-      swipeBg.textContent = isWatched ? '○' : '✓';
-    }
-  } else {
-    swipeRow.querySelectorAll('td').forEach(td => td.style.transform = '');
-    if (swipeBg) swipeBg.style.display = 'none';
+  if (swipeDirection) return;
+  const dx = Math.abs(e.touches[0].clientX - swipeStartX);
+  const dy = Math.abs(e.touches[0].clientY - swipeStartY);
+  if (dx > 10 || dy > 10) {
+    swipeDirection = dx > dy ? 'h' : 'v';
   }
 }, { passive: true });
 
 document.addEventListener('touchend', (e) => {
-  if (swipeRow && swipeLocked) {
-    const dx = e.changedTouches[0].clientX - swipeStartX;
-    const row = swipeRow;
-    const swipeBg = row.querySelector('.swipe-bg');
-    row.classList.remove('swiping');
-    row.querySelectorAll('td').forEach(td => td.style.transform = '');
-    if (swipeBg) swipeBg.style.display = 'none';
+  const dx = e.changedTouches[0].clientX - swipeStartX;
+  const dy = e.changedTouches[0].clientY - swipeStartY;
 
-    if (dx < -80) {
-      const vid = row.dataset.vid;
-      const btn = row.querySelector('.btn-watch');
-      api(`/api/videos/${encodeURIComponent(vid)}/watched`, { method: 'POST' }).then(data => {
-        if (data.watched) {
-          state.watchedIds.add(vid);
-        } else {
-          state.watchedIds.delete(vid);
-        }
-        row.classList.toggle('watched', data.watched);
-        if (btn) {
-          btn.classList.toggle('is-watched', data.watched);
-          btn.innerHTML = data.watched ? '&#10003;' : '&#9675;';
-        }
-        loadChannels();
-      });
+  if (swipeDirection === 'h' && swipeRow && dx < -60) {
+    const row = swipeRow;
+    const vid = row.dataset.vid;
+    const btn = row.querySelector('.btn-watch');
+    if (btn) {
+      btn.classList.remove('swipe-pop');
+      void btn.offsetWidth;
+      btn.classList.add('swipe-pop');
     }
+    api(`/api/videos/${encodeURIComponent(vid)}/watched`, { method: 'POST' }).then(data => {
+      if (data.watched) {
+        state.watchedIds.add(vid);
+      } else {
+        state.watchedIds.delete(vid);
+      }
+      row.classList.toggle('watched', data.watched);
+      if (btn) {
+        btn.classList.toggle('is-watched', data.watched);
+        btn.innerHTML = data.watched ? '&#10003;' : '&#9675;';
+      }
+      loadChannels();
+    });
     swipeRow = null;
+    swipeDirection = null;
     return;
   }
-  swipeRow = null;
 
-  const dx = e.changedTouches[0].clientX - touchStartX;
-  const dy = e.changedTouches[0].clientY - touchStartY;
+  swipeRow = null;
+  swipeDirection = null;
+
   if (Math.abs(dy) > Math.abs(dx)) return;
 
   const sidebarOpen = document.getElementById('sidebar').classList.contains('open');
@@ -1672,7 +1789,48 @@ function formatViews(n) {
   return String(n);
 }
 
-(async function init() {
+async function showLoginScreen() {
+  document.getElementById('loginScreen').style.display = '';
+  document.getElementById('appLayout').style.display = 'none';
+  try {
+    const users = await (await fetch('/api/auth/users')).json();
+    const container = document.getElementById('loginUsers');
+    const noUsers = document.getElementById('loginNoUsers');
+    if (users.length === 0) {
+      container.innerHTML = '';
+      noUsers.style.display = '';
+      return;
+    }
+    noUsers.style.display = 'none';
+    container.innerHTML = users.map(u => `
+      <button class="login-user-btn" data-id="${u.id}">
+        <span class="user-avatar">${esc(u.name.charAt(0).toUpperCase())}</span>
+        <span class="user-name">${esc(u.name)}</span>
+      </button>
+    `).join('');
+    container.querySelectorAll('.login-user-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: parseInt(btn.dataset.id) }),
+        });
+        if (res.ok) {
+          const user = await res.json();
+          state.currentUser = user;
+          enterApp();
+        }
+      });
+    });
+  } catch {
+    document.getElementById('loginUsers').innerHTML = '<p style="color:var(--red)">Failed to connect</p>';
+  }
+}
+
+async function enterApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appLayout').style.display = '';
+  document.getElementById('userMenuBtn').textContent = state.currentUser.name;
   updateSortButton();
   try {
     await Promise.all([loadChannels(), loadWatched()]);
@@ -1682,6 +1840,81 @@ function formatViews(n) {
       <div class="empty-icon">&#9888;</div>
       <p>Failed to connect to the server.</p>
     </div>`;
+  }
+}
+
+document.getElementById('userMenuBtn').addEventListener('click', async () => {
+  if (state.currentUser && state.currentUser.role === 'admin') {
+    const panel = document.getElementById('adminPanel');
+    panel.classList.toggle('open');
+    if (panel.classList.contains('open')) await loadAdminUsers();
+  } else {
+    if (confirm('Log out?')) {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      state.currentUser = null;
+      showLoginScreen();
+    }
+  }
+});
+
+document.getElementById('adminClose').addEventListener('click', () => {
+  document.getElementById('adminPanel').classList.remove('open');
+});
+
+document.getElementById('adminLogout').addEventListener('click', async () => {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  document.getElementById('adminPanel').classList.remove('open');
+  state.currentUser = null;
+  showLoginScreen();
+});
+
+async function loadAdminUsers() {
+  try {
+    const users = await api('/api/admin/users');
+    const list = document.getElementById('adminUserList');
+    list.innerHTML = users.map(u => `
+      <div class="admin-user-item">
+        <div class="user-info">${esc(u.name)}<span class="role">${u.role}</span></div>
+        ${u.id !== state.currentUser.id ? `<button class="btn-remove-user" data-id="${u.id}" title="Remove">&times;</button>` : ''}
+      </div>
+    `).join('');
+    list.querySelectorAll('.btn-remove-user').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Remove this user and all their data?')) return;
+        await api(`/api/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
+        await loadAdminUsers();
+      });
+    });
+  } catch {}
+}
+
+document.getElementById('adminAddForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = document.getElementById('adminNewName').value.trim();
+  if (!name) return;
+  try {
+    await api('/api/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    document.getElementById('adminNewName').value = '';
+    await loadAdminUsers();
+    toast('User added', 'success');
+  } catch { toast('Failed to add user', 'error'); }
+});
+
+(async function init() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      state.currentUser = await res.json();
+      enterApp();
+    } else {
+      showLoginScreen();
+    }
+  } catch {
+    showLoginScreen();
   }
 })();
 </script>

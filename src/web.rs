@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::io::ReaderStream;
 use tower_http::cors::CorsLayer;
 
-use crate::db::{Database, Subscription, Video};
+use crate::db::{Database, Subscription, User, Video};
 use crate::ytdlp;
 
 type Db = Arc<Mutex<Database>>;
@@ -29,14 +29,50 @@ fn lock_db(db: &Db) -> Result<std::sync::MutexGuard<'_, Database>, (StatusCode, 
     db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))
 }
 
+fn get_session_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|c| {
+                let c = c.trim();
+                c.strip_prefix("ft_session=").map(|v| v.to_string())
+            })
+        })
+}
+
+fn require_user(db: &Db, headers: &HeaderMap) -> Result<User, (StatusCode, Json<ErrorResponse>)> {
+    let token = get_session_token(headers)
+        .ok_or_else(|| err_json(StatusCode::UNAUTHORIZED, "Not logged in"))?;
+    let db = lock_db(db)?;
+    db.get_session_user(&token)
+        .ok_or_else(|| err_json(StatusCode::UNAUTHORIZED, "Invalid session"))
+}
+
+fn require_admin(db: &Db, headers: &HeaderMap) -> Result<User, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(db, headers)?;
+    if user.role != "admin" {
+        return Err(err_json(StatusCode::FORBIDDEN, "Admin access required"));
+    }
+    Ok(user)
+}
+
 static INDEX_HTML: &str = include_str!("../static/index.html");
 
 pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::open().map_err(|e| format!("Failed to open database: {e}"))?;
+    db.cleanup_expired_sessions();
     let db: Db = Arc::new(Mutex::new(db));
 
     let app = Router::new()
         .route("/", get(serve_index))
+        .route("/api/auth/users", get(list_users_for_login))
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/logout", post(logout))
+        .route("/api/auth/me", get(get_current_user))
+        .route("/api/admin/users", get(admin_list_users))
+        .route("/api/admin/users", post(admin_add_user))
+        .route("/api/admin/users/{id}", delete(admin_remove_user))
         .route("/api/channels", get(list_channels))
         .route("/api/channels", post(add_channel))
         .route("/api/channels/{id}", delete(remove_channel))
@@ -54,7 +90,7 @@ pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/settings/hide-shorts", post(toggle_hide_shorts))
         .route("/api/settings/resolution", post(toggle_resolution))
         .route("/api/watched", get(get_watched))
-        .layer(CorsLayer::permissive())
+        .layer(CorsLayer::new())
         .with_state(db);
 
     let addr = format!("0.0.0.0:{port}");
@@ -68,6 +104,115 @@ pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn serve_index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+#[derive(Serialize)]
+struct LoginUser {
+    id: i64,
+    name: String,
+}
+
+async fn list_users_for_login(
+    State(db): State<Db>,
+) -> Result<Json<Vec<LoginUser>>, (StatusCode, Json<ErrorResponse>)> {
+    let db_guard = lock_db(&db)?;
+    let users = db_guard.get_users();
+    Ok(Json(users.into_iter().map(|u| LoginUser { id: u.id, name: u.name }).collect()))
+}
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    user_id: i64,
+}
+
+async fn login(
+    State(db): State<Db>,
+    Json(body): Json<LoginRequest>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let db_guard = lock_db(&db)?;
+    let user = db_guard.get_user(body.user_id)
+        .ok_or_else(|| err_json(StatusCode::NOT_FOUND, "User not found"))?;
+    let token = db_guard.create_session(user.id);
+    drop(db_guard);
+
+    Response::builder()
+        .header("Set-Cookie", format!("ft_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800", token))
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_string(&user).unwrap()))
+        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Response error: {e}")))
+}
+
+async fn logout(
+    State(db): State<Db>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(token) = get_session_token(&headers) {
+        let db_guard = lock_db(&db)?;
+        db_guard.delete_session(&token);
+    }
+    Response::builder()
+        .header("Set-Cookie", "ft_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"ok":true}"#))
+        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Response error: {e}")))
+}
+
+async fn get_current_user(
+    State(db): State<Db>,
+    headers: HeaderMap,
+) -> Result<Json<User>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
+    Ok(Json(user))
+}
+
+async fn admin_list_users(
+    State(db): State<Db>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<User>>, (StatusCode, Json<ErrorResponse>)> {
+    require_admin(&db, &headers)?;
+    let db_guard = lock_db(&db)?;
+    Ok(Json(db_guard.get_users()))
+}
+
+#[derive(Deserialize)]
+struct AddUserRequest {
+    name: String,
+    role: Option<String>,
+}
+
+async fn admin_add_user(
+    State(db): State<Db>,
+    headers: HeaderMap,
+    Json(body): Json<AddUserRequest>,
+) -> Result<(StatusCode, Json<User>), (StatusCode, Json<ErrorResponse>)> {
+    require_admin(&db, &headers)?;
+    let name = body.name.trim().to_string();
+    if name.is_empty() || name.len() > 64 {
+        return Err(err_json(StatusCode::BAD_REQUEST, "Name must be 1-64 characters"));
+    }
+    let role = match body.role.as_deref() {
+        Some("admin") => "admin",
+        _ => "user",
+    };
+    let db_guard = lock_db(&db)?;
+    let user = db_guard.add_user(&name, role)
+        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok((StatusCode::CREATED, Json(user)))
+}
+
+async fn admin_remove_user(
+    State(db): State<Db>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let admin = require_admin(&db, &headers)?;
+    if admin.id == id {
+        return Err(err_json(StatusCode::BAD_REQUEST, "Cannot remove yourself"));
+    }
+    let db_guard = lock_db(&db)?;
+    db_guard.remove_user(id)
+        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]
@@ -88,15 +233,17 @@ struct ChannelListResponse {
 
 async fn list_channels(
     State(db): State<Db>,
+    headers: HeaderMap,
 ) -> Result<Json<ChannelListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        let settings = db.get_settings();
-        let subs = db.get_subscriptions();
-        let new_counts = db.get_new_video_counts(settings.hide_shorts);
+        let settings = db.get_settings(user.id);
+        let subs = db.get_subscriptions(user.id);
+        let new_counts = db.get_new_video_counts(settings.hide_shorts, user.id);
         let stats = db.get_channel_stats(settings.hide_shorts);
-        let fully_watched = db.get_fully_watched_channels(settings.hide_shorts);
+        let fully_watched = db.get_fully_watched_channels(settings.hide_shorts, user.id);
 
         let channels = subs
             .into_iter()
@@ -134,8 +281,10 @@ struct AddChannelResponse {
 
 async fn add_channel(
     State(db): State<Db>,
+    headers: HeaderMap,
     Json(body): Json<AddChannelRequest>,
 ) -> Result<(StatusCode, Json<AddChannelResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let info = ytdlp::get_channel_info(&body.url)
         .await
         .map_err(|e| err_json(StatusCode::BAD_REQUEST, e))?;
@@ -153,7 +302,7 @@ async fn add_channel(
     {
         let db_guard = lock_db(&db)?;
         db_guard
-            .add_subscription(&sub)
+            .add_subscription(&sub, user.id)
             .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     }
 
@@ -167,7 +316,7 @@ async fn add_channel(
 
     let db_guard = lock_db(&db)?;
     let saved_sub = db_guard
-        .get_subscriptions()
+        .get_subscriptions(user.id)
         .into_iter()
         .find(|s| s.id == sub.id)
         .unwrap_or(sub);
@@ -183,12 +332,14 @@ async fn add_channel(
 
 async fn remove_channel(
     State(db): State<Db>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        db.remove_subscription(&id)
+        db.remove_subscription(&id, user.id)
             .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         Ok(StatusCode::NO_CONTENT)
     })
@@ -211,14 +362,16 @@ struct PaginatedVideosResponse {
 
 async fn get_channel_videos(
     State(db): State<Db>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<PaginationQuery>,
 ) -> Result<Json<PaginatedVideosResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let page = params.page.unwrap_or(0);
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        let hide_shorts = db.get_settings().hide_shorts;
+        let hide_shorts = db.get_settings(user.id).hide_shorts;
         let ids = vec![id];
         let result = db.get_stored_videos_paginated(Some(&ids), page, 50, hide_shorts);
         Ok(Json(PaginatedVideosResponse {
@@ -234,13 +387,15 @@ async fn get_channel_videos(
 
 async fn get_all_videos(
     State(db): State<Db>,
+    headers: HeaderMap,
     Query(params): Query<PaginationQuery>,
 ) -> Result<Json<PaginatedVideosResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let page = params.page.unwrap_or(0);
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        let hide_shorts = db.get_settings().hide_shorts;
+        let hide_shorts = db.get_settings(user.id).hide_shorts;
         let result = db.get_stored_videos_paginated(None, page, 50, hide_shorts);
         Ok(Json(PaginatedVideosResponse {
             total: result.total,
@@ -260,12 +415,14 @@ struct WatchedResponse {
 
 async fn toggle_watched(
     State(db): State<Db>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<WatchedResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        let watched = db.toggle_watched(&id);
+        let watched = db.toggle_watched(&id, user.id);
         Ok(Json(WatchedResponse { watched }))
     })
     .await
@@ -274,14 +431,16 @@ async fn toggle_watched(
 
 async fn stream_video(
     State(db): State<Db>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     if !ytdlp::is_valid_video_id(&id) {
         return Err(err_json(StatusCode::BAD_REQUEST, "Invalid video ID"));
     }
     let max_resolution = {
         let db_guard = lock_db(&db)?;
-        db_guard.get_settings().max_resolution
+        db_guard.get_settings(user.id).max_resolution
     };
     let video_url = format!("https://www.youtube.com/watch?v={}", id);
     let urls = ytdlp::get_stream_urls(&video_url, &max_resolution)
@@ -340,14 +499,16 @@ struct DirectUrlResponse {
 
 async fn direct_url(
     State(db): State<Db>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<DirectUrlResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     if !ytdlp::is_valid_video_id(&id) {
         return Err(err_json(StatusCode::BAD_REQUEST, "Invalid video ID"));
     }
     let max_resolution = {
         let db_guard = lock_db(&db)?;
-        db_guard.get_settings().max_resolution
+        db_guard.get_settings(user.id).max_resolution
     };
     let video_url = format!("https://www.youtube.com/watch?v={}", id);
     let format = if max_resolution == "1080" {
@@ -387,14 +548,16 @@ struct MarkWatchedResponse {
 
 async fn mark_channel_watched(
     State(db): State<Db>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<MarkWatchedResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db_guard = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
         let videos = db_guard.get_stored_videos(&id);
         let video_ids: Vec<String> = videos.iter().map(|v| v.id.clone()).collect();
-        let marked = db_guard.mark_channel_all_watched(&video_ids);
+        let marked = db_guard.mark_channel_all_watched(&video_ids, user.id);
         Ok(Json(MarkWatchedResponse { marked }))
     })
     .await
@@ -407,8 +570,11 @@ struct SearchQuery {
 }
 
 async fn search(
+    State(db): State<Db>,
+    headers: HeaderMap,
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<Vec<Video>>, (StatusCode, Json<ErrorResponse>)> {
+    require_user(&db, &headers)?;
     let videos = ytdlp::search_youtube(&params.q, 20)
         .await
         .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -423,8 +589,11 @@ struct DescriptionResponse {
 }
 
 async fn get_video_description(
+    State(db): State<Db>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<DescriptionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    require_user(&db, &headers)?;
     let desc = ytdlp::get_video_description(&id)
         .await
         .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -442,11 +611,13 @@ struct RefreshResponse {
 
 async fn refresh(
     State(db): State<Db>,
+    headers: HeaderMap,
 ) -> Result<Json<RefreshResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let subs = {
         let db_guard = lock_db(&db)?;
         db_guard
-            .get_subscriptions()
+            .get_subscriptions(user.id)
             .into_iter()
             .map(|s| (s.id, s.name))
             .collect::<Vec<_>>()
@@ -475,11 +646,13 @@ struct PrimeResponse {
 
 async fn prime_channel(
     State(db): State<Db>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<PrimeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let (channel_name, channel_url, existing_ids) = {
         let db_guard = lock_db(&db)?;
-        let subs = db_guard.get_subscriptions();
+        let subs = db_guard.get_subscriptions(user.id);
         let sub = subs
             .into_iter()
             .find(|s| s.id == id)
@@ -519,11 +692,13 @@ async fn prime_channel(
 
 async fn get_settings(
     State(db): State<Db>,
+    headers: HeaderMap,
 ) -> Result<Json<crate::db::Settings>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        Ok(Json(db.get_settings()))
+        Ok(Json(db.get_settings(user.id)))
     })
     .await
     .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")))?
@@ -536,13 +711,15 @@ struct HideShortsResponse {
 
 async fn toggle_hide_shorts(
     State(db): State<Db>,
+    headers: HeaderMap,
 ) -> Result<Json<HideShortsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        let current = db.get_settings();
+        let current = db.get_settings(user.id);
         let new_val = !current.hide_shorts;
-        db.update_setting("hideShorts", &serde_json::to_string(&new_val).unwrap());
+        db.update_setting("hideShorts", &serde_json::to_string(&new_val).unwrap(), user.id);
         Ok(Json(HideShortsResponse {
             hide_shorts: new_val,
         }))
@@ -558,13 +735,15 @@ struct ResolutionResponse {
 
 async fn toggle_resolution(
     State(db): State<Db>,
+    headers: HeaderMap,
 ) -> Result<Json<ResolutionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        let current = db.get_settings();
+        let current = db.get_settings(user.id);
         let new_val = if current.max_resolution == "1080" { "max" } else { "1080" };
-        db.update_setting("maxResolution", &serde_json::to_string(new_val).unwrap());
+        db.update_setting("maxResolution", &serde_json::to_string(new_val).unwrap(), user.id);
         Ok(Json(ResolutionResponse {
             max_resolution: new_val.to_string(),
         }))
@@ -580,11 +759,13 @@ struct WatchedIdsResponse {
 
 async fn get_watched(
     State(db): State<Db>,
+    headers: HeaderMap,
 ) -> Result<Json<WatchedIdsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user = require_user(&db, &headers)?;
     let db = db.clone();
     tokio::task::spawn_blocking(move || {
         let db = db.lock().map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Database lock poisoned"))?;
-        let ids: Vec<String> = db.get_watched_ids().into_iter().collect();
+        let ids: Vec<String> = db.get_watched_ids(user.id).into_iter().collect();
         Ok(Json(WatchedIdsResponse { watched: ids }))
     })
     .await
