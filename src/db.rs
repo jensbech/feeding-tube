@@ -306,6 +306,11 @@ impl Database {
                 ALTER TABLE watched_new RENAME TO watched;"
             )).map_err(|e| format!("Failed to migrate watched table: {e}"))?;
         } else {
+            self.conn.execute(
+                "INSERT INTO users (name, role) VALUES ('Admin', 'admin')",
+                [],
+            ).map_err(|e| format!("Failed to create default admin: {e}"))?;
+
             self.conn.execute_batch(
                 "DROP TABLE IF EXISTS subscriptions;
                  CREATE TABLE subscriptions (
