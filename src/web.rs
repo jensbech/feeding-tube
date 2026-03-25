@@ -962,9 +962,48 @@ async fn hls_playlist(
 }
 
 async fn hls_segment(
-    State(_db): State<Db>,
-    _headers: HeaderMap,
-    Path((_id, _segment)): Path<(String, String)>,
+    State(db): State<Db>,
+    headers: HeaderMap,
+    Path((id, segment)): Path<(String, String)>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
-    Err(err_json(StatusCode::NOT_IMPLEMENTED, "not yet implemented"))
+    require_user(&db, &headers)?;
+    if !ytdlp::is_valid_video_id(&id) {
+        return Err(err_json(StatusCode::BAD_REQUEST, "Invalid video ID"));
+    }
+    if !ytdlp::is_valid_segment_name(&segment) {
+        return Err(err_json(StatusCode::BAD_REQUEST, "Invalid segment name"));
+    }
+
+    let base = std::path::PathBuf::from(format!("/tmp/ft-hls/{}", id));
+    let path = base.join(&segment);
+    // Belt-and-suspenders: verify the resolved path stays inside the expected dir
+    if !path.starts_with(&base) {
+        return Err(err_json(StatusCode::BAD_REQUEST, "Invalid segment path"));
+    }
+
+    // Poll up to 5 seconds for the segment to be written by FFmpeg
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if tokio::fs::metadata(&path).await.is_ok() {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse { error: "Segment not found".into() }),
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to open segment: {e}")))?;
+    let stream = ReaderStream::new(file);
+
+    Response::builder()
+        .header("Content-Type", "video/mp2t")
+        .header("Cache-Control", "no-cache")
+        .body(Body::from_stream(stream))
+        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Response error: {e}")))
 }
