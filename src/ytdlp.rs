@@ -450,6 +450,86 @@ pub async fn get_stream_urls(video_url: &str, max_resolution: &str) -> Result<Ve
     Ok(urls)
 }
 
+// ── HLS Helpers ────────────────────────────────────────────
+
+pub fn hls_format_string(max_resolution: &str) -> String {
+    if max_resolution == "1080" {
+        "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/bestvideo[height<=1080]+bestaudio/best".to_string()
+    } else {
+        "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best".to_string()
+    }
+}
+
+pub fn is_valid_segment_name(name: &str) -> bool {
+    Regex::new(r"^[a-zA-Z0-9_\-]+\.ts$").unwrap().is_match(name)
+}
+
+#[derive(Debug)]
+pub struct HlsInfo {
+    pub video_url: String,
+    pub audio_url: Option<String>,
+    pub needs_transcode: bool,
+}
+
+pub async fn get_hls_info(video_id: &str, max_resolution: &str) -> Result<HlsInfo, String> {
+    if !is_valid_video_id(video_id) {
+        return Err("Invalid video ID".to_string());
+    }
+    let url = format!("https://www.youtube.com/watch?v={}", video_id);
+    let format = hls_format_string(max_resolution);
+
+    let result = timeout(
+        Duration::from_secs(30),
+        Command::new("yt-dlp")
+            .args(["--dump-json", "-f", &format, "--no-warnings", &url])
+            .output(),
+    )
+    .await
+    .map_err(|_| "yt-dlp timed out".to_string())?
+    .map_err(|e| format!("Failed to run yt-dlp: {e}"))?;
+
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        return Err(format!("yt-dlp error: {}", stderr.trim()));
+    }
+
+    let data: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&result.stdout))
+            .map_err(|e| format!("Failed to parse yt-dlp output: {e}"))?;
+
+    if let Some(formats) = data["requested_formats"].as_array() {
+        let video = formats.iter().find(|f| {
+            f["vcodec"].as_str().map(|v| v != "none").unwrap_or(false)
+        });
+        let audio = formats.iter().find(|f| {
+            f["acodec"].as_str().map(|a| a != "none").unwrap_or(false)
+                && f["vcodec"].as_str().map(|v| v == "none").unwrap_or(true)
+        });
+
+        let video_url = video
+            .and_then(|f| f["url"].as_str())
+            .ok_or("No video URL in yt-dlp output")?
+            .to_string();
+        let audio_url = audio.and_then(|f| f["url"].as_str()).map(|s| s.to_string());
+
+        let v_codec = video.and_then(|f| f["vcodec"].as_str()).unwrap_or("");
+        let a_codec = audio.and_then(|f| f["acodec"].as_str()).unwrap_or("");
+        let needs_transcode = !v_codec.starts_with("avc1") || !a_codec.starts_with("mp4a");
+
+        Ok(HlsInfo { video_url, audio_url, needs_transcode })
+    } else {
+        let video_url = data["url"]
+            .as_str()
+            .ok_or("No URL in yt-dlp output")?
+            .to_string();
+        let v_codec = data["vcodec"].as_str().unwrap_or("");
+        let a_codec = data["acodec"].as_str().unwrap_or("");
+        let needs_transcode = !v_codec.starts_with("avc1") || !a_codec.starts_with("mp4a");
+
+        Ok(HlsInfo { video_url, audio_url: None, needs_transcode })
+    }
+}
+
 // ── Priming ────────────────────────────────────────────────
 
 async fn fetch_with_retry(
@@ -875,5 +955,49 @@ mod tests {
     #[test]
     fn test_parse_date_not_numbers() {
         assert!(parse_date_yyyymmdd("abcdefgh").is_none());
+    }
+
+    // ── HLS helper tests ─────────────────────────────────────
+
+    #[test]
+    fn test_hls_format_string_1080() {
+        let f = hls_format_string("1080");
+        assert!(f.contains("height<=1080"), "should cap at 1080p");
+        assert!(f.contains("avc1"), "should prefer H.264");
+        assert!(f.contains("mp4a"), "should prefer AAC");
+    }
+
+    #[test]
+    fn test_hls_format_string_max() {
+        let f = hls_format_string("max");
+        assert!(!f.contains("height<="), "should not cap resolution when max");
+        assert!(f.contains("avc1"), "should still prefer H.264");
+        assert!(f.contains("mp4a"), "should still prefer AAC");
+    }
+
+    #[test]
+    fn test_is_valid_segment_name_valid() {
+        assert!(is_valid_segment_name("seg0000.ts"));
+        assert!(is_valid_segment_name("segment_00-01.ts"));
+        assert!(is_valid_segment_name("a.ts"));
+    }
+
+    #[test]
+    fn test_is_valid_segment_name_rejects_traversal() {
+        assert!(!is_valid_segment_name("../etc/passwd"));
+        assert!(!is_valid_segment_name("../../foo.ts"));
+    }
+
+    #[test]
+    fn test_is_valid_segment_name_rejects_wrong_extension() {
+        assert!(!is_valid_segment_name("foo.mp4"));
+        assert!(!is_valid_segment_name("foo.m3u8"));
+        assert!(!is_valid_segment_name("foo"));
+    }
+
+    #[test]
+    fn test_is_valid_segment_name_rejects_spaces_and_empty() {
+        assert!(!is_valid_segment_name("foo bar.ts"));
+        assert!(!is_valid_segment_name(""));
     }
 }
