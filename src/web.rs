@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, Response};
 use axum::routing::{delete, get, post};
@@ -15,6 +15,32 @@ use crate::db::{Database, Subscription, User, Video};
 use crate::ytdlp;
 
 type Db = Arc<Mutex<Database>>;
+
+type HlsState = Arc<Mutex<Option<HlsSession>>>;
+
+struct HlsSession {
+    video_id: String,
+    process: tokio::process::Child,
+    dir: std::path::PathBuf,
+}
+
+#[derive(Clone)]
+struct AppState {
+    db: Db,
+    hls: HlsState,
+}
+
+impl FromRef<AppState> for Db {
+    fn from_ref(state: &AppState) -> Self {
+        state.db.clone()
+    }
+}
+
+impl FromRef<AppState> for HlsState {
+    fn from_ref(state: &AppState) -> Self {
+        state.hls.clone()
+    }
+}
 
 #[derive(Serialize)]
 struct ErrorResponse {
@@ -63,6 +89,8 @@ pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::open().map_err(|e| format!("Failed to open database: {e}"))?;
     db.cleanup_expired_sessions();
     let db: Db = Arc::new(Mutex::new(db));
+    let hls: HlsState = Arc::new(Mutex::new(None));
+    let hls_cleanup = hls.clone();
 
     let app = Router::new()
         .route("/", get(serve_index))
@@ -82,6 +110,8 @@ pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/videos", get(get_all_videos))
         .route("/api/videos/{id}/watched", post(toggle_watched))
         .route("/api/stream/{id}", get(stream_video))
+        .route("/api/hls/{id}/playlist.m3u8", get(hls_playlist))
+        .route("/api/hls/{id}/{segment}", get(hls_segment))
         .route("/api/videos/{id}/direct-url", get(direct_url))
         .route("/api/videos/{id}/description", get(get_video_description))
         .route("/api/search", get(search))
@@ -91,13 +121,24 @@ pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/settings/resolution", post(toggle_resolution))
         .route("/api/watched", get(get_watched))
         .layer(CorsLayer::new())
-        .with_state(db);
+        .with_state(AppState { db, hls });
 
     let addr = format!("0.0.0.0:{port}");
     println!("Feeding Tube web UI: http://localhost:{port}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
+
+    let old_session = hls_cleanup.lock().ok().and_then(|mut g| g.take());
+    if let Some(mut session) = old_session {
+        let _ = session.process.kill().await;
+        let _ = tokio::fs::remove_dir_all(&session.dir).await;
+    }
+    let _ = tokio::fs::remove_dir_all("/tmp/ft-hls").await;
 
     Ok(())
 }
@@ -770,4 +811,21 @@ async fn get_watched(
     })
     .await
     .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")))?
+}
+
+async fn hls_playlist(
+    State(_db): State<Db>,
+    State(_hls): State<HlsState>,
+    _headers: HeaderMap,
+    Path(_id): Path<String>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    Err(err_json(StatusCode::NOT_IMPLEMENTED, "not yet implemented"))
+}
+
+async fn hls_segment(
+    State(_db): State<Db>,
+    _headers: HeaderMap,
+    Path((_id, _segment)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    Err(err_json(StatusCode::NOT_IMPLEMENTED, "not yet implemented"))
 }
