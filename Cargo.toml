@@ -13,7 +13,7 @@ path = "src/main.rs"
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync", "fs", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
