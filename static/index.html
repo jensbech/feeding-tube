@@ -869,7 +869,22 @@ tr.kb-focus .video-title { color: var(--cyan); }
   font-size: 16px;
   padding: 4px 8px;
 }
+.plyr {
+  width: 100%;
+}
+.plyr--video {
+  border-radius: 6px;
+  overflow: hidden;
+}
+@media (max-width: 768px) {
+  .plyr--video {
+    max-height: 50vh;
+  }
+}
 </style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.css">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.polyfilled.min.js"></script>
 </head>
 <body>
 
@@ -1331,8 +1346,11 @@ async function openPlayer(videoId) {
   document.getElementById('modalMeta').innerHTML = metaParts.join('');
 
   const container = document.getElementById('playerContainer');
-  container.innerHTML = '<div class="player-loading"><div class="spinner"></div> Loading stream...</div>';
 
+  if (currentPlyr) { currentPlyr.destroy(); currentPlyr = null; }
+  if (currentHls) { currentHls.destroy(); currentHls = null; }
+
+  container.innerHTML = '<div class="player-loading"><div class="spinner"></div> Loading stream...</div>';
   document.getElementById('playerModal').classList.add('open');
   document.body.style.overflow = 'hidden';
 
@@ -1351,64 +1369,101 @@ async function openPlayer(videoId) {
     });
   }
 
+  const playlistUrl = `/api/hls/${encodeURIComponent(videoId)}/playlist.m3u8`;
   const vid = document.createElement('video');
-  vid.controls = true;
-  vid.autoplay = true;
-  vid.setAttribute('playsinline', '');
-  vid.setAttribute('webkit-playsinline', '');
-  vid.onerror = () => {
-    if (currentPlayingId !== videoId) return;
-    container.innerHTML = `<div class="player-error"><span>Stream playback failed</span><a href="https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}" target="_blank" rel="noopener">Open on YouTube</a></div>`;
-  };
-  container.innerHTML = '';
-  container.appendChild(vid);
 
-  const isMobile = /Android|iPhone|iPad|iPod|Mobile|webOS/i.test(navigator.userAgent) || (window.innerWidth <= 768);
-  if (isMobile) {
-    try {
-      const data = await api(`/api/videos/${encodeURIComponent(videoId)}/direct-url`);
-      if (data && data.url) {
-        vid.src = data.url;
-      } else {
-        vid.src = `/api/stream/${encodeURIComponent(videoId)}`;
+  if (Hls.isSupported()) {
+    const hls = new Hls({ xhrSetup: xhr => { xhr.withCredentials = true; } });
+    currentHls = hls;
+
+    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      if (currentPlayingId !== videoId) return;
+
+      container.innerHTML = '';
+      container.appendChild(vid);
+
+      const heights = data.levels.map(l => l.height);
+
+      currentPlyr = new Plyr(vid, {
+        controls: ['play-large', 'play', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'fullscreen'],
+        settings: ['quality', 'speed'],
+        quality: {
+          default: 0,
+          options: [0, ...heights],
+          forced: true,
+          onChange: (newHeight) => {
+            if (!currentHls) return;
+            if (newHeight === 0) {
+              currentHls.currentLevel = -1;
+            } else {
+              const idx = data.levels.findIndex(l => l.height === newHeight);
+              if (idx !== -1) currentHls.currentLevel = idx;
+            }
+          },
+        },
+        i18n: { qualityLabel: { 0: 'Auto' } },
+      });
+
+      if (state.bgPlay) {
+        vid.addEventListener('playing', () => startBgAudio(videoId), { once: true });
       }
-    } catch {
-      vid.src = `/api/stream/${encodeURIComponent(videoId)}`;
-    }
-  } else {
-    vid.src = `/api/stream/${encodeURIComponent(videoId)}`;
-  }
+    });
 
-  if (state.bgPlay) {
-    vid.addEventListener('playing', () => startBgAudio(videoId), { once: true });
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      if (data.fatal && currentPlayingId === videoId) {
+        if (currentPlyr) { currentPlyr.destroy(); currentPlyr = null; }
+        if (currentHls) { currentHls.destroy(); currentHls = null; }
+        container.innerHTML = `<div class="player-error"><span>Stream playback failed</span><a href="https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}" target="_blank" rel="noopener">Open on YouTube</a></div>`;
+      }
+    });
+
+    hls.loadSource(playlistUrl);
+    hls.attachMedia(vid);
+  } else {
+    container.innerHTML = '';
+    container.appendChild(vid);
+    vid.src = playlistUrl;
+
+    currentPlyr = new Plyr(vid, {
+      controls: ['play-large', 'play', 'progress', 'current-time', 'duration', 'mute', 'volume', 'fullscreen'],
+    });
+
+    vid.onerror = () => {
+      if (currentPlayingId === videoId) {
+        container.innerHTML = `<div class="player-error"><span>Stream playback failed</span><a href="https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}" target="_blank" rel="noopener">Open on YouTube</a></div>`;
+      }
+    };
+
+    if (state.bgPlay) {
+      vid.addEventListener('playing', () => startBgAudio(videoId), { once: true });
+    }
   }
 }
 
+let currentPlyr = null;
+let currentHls = null;
 let bgAudio = null;
 
 function closePlayer() {
   currentPlayingId = null;
   document.title = 'FeedingTube';
-  const container = document.getElementById('playerContainer');
-  const vid = container.querySelector('video');
-  if (vid) {
-    vid.pause();
-    vid.src = '';
-  }
+
+  if (currentPlyr) { currentPlyr.destroy(); currentPlyr = null; }
+  if (currentHls) { currentHls.destroy(); currentHls = null; }
+
   if (bgAudio) {
     bgAudio.pause();
     bgAudio.src = '';
+    if (bgAudio._hls) { bgAudio._hls.destroy(); bgAudio._hls = null; }
     bgAudio = null;
   }
-  container.innerHTML = '';
+
+  document.getElementById('playerContainer').innerHTML = '';
   document.getElementById('playerModal').classList.remove('open');
   document.body.style.overflow = '';
 }
 
-const isMobileDevice = /Android|iPhone|iPad|iPod|Mobile|webOS/i.test(navigator.userAgent) || (window.innerWidth <= 768);
-if (isMobileDevice) {
-  document.getElementById('bgPlayBtn').style.display = '';
-}
+document.getElementById('bgPlayBtn').style.display = '';
 
 document.getElementById('bgPlayBtn').addEventListener('click', () => {
   state.bgPlay = !state.bgPlay;
@@ -1418,6 +1473,7 @@ document.getElementById('bgPlayBtn').addEventListener('click', () => {
   } else if (!state.bgPlay && bgAudio) {
     bgAudio.pause();
     bgAudio.src = '';
+    if (bgAudio._hls) { bgAudio._hls.destroy(); bgAudio._hls = null; }
     bgAudio = null;
   }
   toast(state.bgPlay ? 'Background play on' : 'Background play off', 'success');
@@ -1440,28 +1496,39 @@ async function startBgAudio(videoId) {
   if (bgAudio) {
     bgAudio.pause();
     bgAudio.src = '';
+    if (bgAudio._hls) { bgAudio._hls.destroy(); bgAudio._hls = null; }
+    bgAudio = null;
   }
-  try {
-    const data = await api(`/api/videos/${encodeURIComponent(videoId)}/direct-url`);
-    if (data && data.url) {
-      bgAudio = new Audio(data.url);
-      bgAudio.play().catch(() => {});
-      const vid = document.getElementById('playerContainer').querySelector('video');
-      if (vid) {
-        bgAudio.currentTime = vid.currentTime;
-        vid.addEventListener('seeked', () => { if (bgAudio) bgAudio.currentTime = vid.currentTime; });
-      }
-      if ('mediaSession' in navigator) {
-        const video = state.videos.find(v => v.id === videoId);
-        if (video) {
-          navigator.mediaSession.metadata = new MediaMetadata({
-            title: video.title,
-            artist: video.channel_name || 'FeedingTube',
-          });
-        }
-      }
+
+  const playlistUrl = `/api/hls/${encodeURIComponent(videoId)}/playlist.m3u8`;
+  bgAudio = new Audio();
+
+  if (Hls.isSupported()) {
+    const bgHls = new Hls({ xhrSetup: xhr => { xhr.withCredentials = true; } });
+    bgHls.loadSource(playlistUrl);
+    bgHls.attachMedia(bgAudio);
+    bgAudio._hls = bgHls;
+  } else {
+    bgAudio.src = playlistUrl;
+  }
+
+  const vid = document.getElementById('playerContainer').querySelector('video');
+  if (vid) {
+    bgAudio.currentTime = vid.currentTime;
+    vid.addEventListener('seeked', () => { if (bgAudio) bgAudio.currentTime = vid.currentTime; });
+  }
+
+  bgAudio.play().catch(() => {});
+
+  if ('mediaSession' in navigator) {
+    const video = state.videos.find(v => v.id === videoId);
+    if (video) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: video.title,
+        artist: video.channel_name || 'FeedingTube',
+      });
     }
-  } catch {}
+  }
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -1477,6 +1544,7 @@ document.addEventListener('visibilitychange', () => {
       if (vid) vid.currentTime = bgAudio.currentTime;
       bgAudio.pause();
       bgAudio.src = '';
+      if (bgAudio._hls) { bgAudio._hls.destroy(); bgAudio._hls = null; }
       bgAudio = null;
     }
   }

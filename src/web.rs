@@ -110,10 +110,8 @@ pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/channels/{id}/prime", post(prime_channel))
         .route("/api/videos", get(get_all_videos))
         .route("/api/videos/{id}/watched", post(toggle_watched))
-        .route("/api/stream/{id}", get(stream_video))
         .route("/api/hls/{id}/playlist.m3u8", get(hls_playlist))
         .route("/api/hls/{id}/{segment}", get(hls_segment))
-        .route("/api/videos/{id}/direct-url", get(direct_url))
         .route("/api/videos/{id}/description", get(get_video_description))
         .route("/api/search", get(search))
         .route("/api/refresh", post(refresh))
@@ -469,118 +467,6 @@ async fn toggle_watched(
     })
     .await
     .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")))?
-}
-
-async fn stream_video(
-    State(db): State<Db>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
-    let user = require_user(&db, &headers)?;
-    if !ytdlp::is_valid_video_id(&id) {
-        return Err(err_json(StatusCode::BAD_REQUEST, "Invalid video ID"));
-    }
-    let max_resolution = {
-        let db_guard = lock_db(&db)?;
-        db_guard.get_settings(user.id).max_resolution
-    };
-    let video_url = format!("https://www.youtube.com/watch?v={}", id);
-    let urls = ytdlp::get_stream_urls(&video_url, &max_resolution)
-        .await
-        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    let mut ffmpeg_args: Vec<String> = vec![
-        "-hide_banner".into(),
-        "-loglevel".into(),
-        "error".into(),
-    ];
-    for url in &urls {
-        ffmpeg_args.push("-i".into());
-        ffmpeg_args.push(url.clone());
-    }
-    ffmpeg_args.extend([
-        "-c".into(),
-        "copy".into(),
-        "-movflags".into(),
-        "frag_keyframe+empty_moov+default_base_moof".into(),
-        "-f".into(),
-        "mp4".into(),
-        "pipe:1".into(),
-    ]);
-
-    let mut child = tokio::process::Command::new("ffmpeg")
-        .args(&ffmpeg_args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start ffmpeg: {e}")))?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| err_json(StatusCode::INTERNAL_SERVER_ERROR, "No stdout from ffmpeg"))?;
-
-    tokio::spawn(async move {
-        let _ = child.wait().await;
-    });
-
-    let stream = ReaderStream::new(stdout);
-    let body = Body::from_stream(stream);
-
-    Response::builder()
-        .header("Content-Type", "video/mp4")
-        .header("Cache-Control", "no-cache")
-        .body(body)
-        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Response error: {e}")))
-}
-
-#[derive(Serialize)]
-struct DirectUrlResponse {
-    url: String,
-}
-
-async fn direct_url(
-    State(db): State<Db>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Json<DirectUrlResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let user = require_user(&db, &headers)?;
-    if !ytdlp::is_valid_video_id(&id) {
-        return Err(err_json(StatusCode::BAD_REQUEST, "Invalid video ID"));
-    }
-    let max_resolution = {
-        let db_guard = lock_db(&db)?;
-        db_guard.get_settings(user.id).max_resolution
-    };
-    let video_url = format!("https://www.youtube.com/watch?v={}", id);
-    let format = if max_resolution == "1080" {
-        "best[height<=1080][ext=mp4]/best[ext=mp4]/best[height<=1080]/best"
-    } else {
-        "best[ext=mp4]/best"
-    };
-    let output = tokio::process::Command::new("yt-dlp")
-        .args(["-f", format, "-g", "--no-warnings", &video_url])
-        .output()
-        .await
-        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("yt-dlp error: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("yt-dlp error: {}", stderr.trim())));
-    }
-
-    let url = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .lines()
-        .next()
-        .unwrap_or("")
-        .to_string();
-
-    if url.is_empty() {
-        return Err(err_json(StatusCode::INTERNAL_SERVER_ERROR, "No stream URL returned"));
-    }
-
-    Ok(Json(DirectUrlResponse { url }))
 }
 
 #[derive(Serialize)]
