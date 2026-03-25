@@ -865,8 +865,12 @@ async fn hls_playlist(
         let mut ffmpeg_args: Vec<String> =
             vec!["-hide_banner".into(), "-loglevel".into(), "error".into()];
         ffmpeg_args.extend(["-i".into(), info.video_url]);
+        let has_audio_input = info.audio_url.is_some();
         if let Some(audio_url) = info.audio_url {
             ffmpeg_args.extend(["-i".into(), audio_url]);
+        }
+        if has_audio_input {
+            ffmpeg_args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "1:a:0".into()]);
         }
         if info.needs_transcode {
             ffmpeg_args.extend([
@@ -881,8 +885,13 @@ async fn hls_playlist(
             "-f".into(), "hls".into(),
             "-hls_time".into(), "4".into(),
             "-hls_list_size".into(), "0".into(),
-            "-hls_segment_filename".into(), segment_pattern.to_str().unwrap().to_string(),
-            playlist_path.to_str().unwrap().to_string(),
+            "-hls_segment_filename".into(),
+            segment_pattern.to_str()
+                .ok_or_else(|| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Invalid segment path"))?
+                .to_string(),
+            playlist_path.to_str()
+                .ok_or_else(|| err_json(StatusCode::INTERNAL_SERVER_ERROR, "Invalid playlist path"))?
+                .to_string(),
         ]);
 
         let child = tokio::process::Command::new("ffmpeg")
@@ -911,6 +920,11 @@ async fn hls_playlist(
             break;
         }
         if tokio::time::Instant::now() >= deadline {
+            let dead_session = hls.lock().ok().and_then(|mut g| g.take());
+            if let Some(mut s) = dead_session {
+                let _ = s.process.kill().await;
+                let _ = tokio::fs::remove_dir_all(&s.dir).await;
+            }
             return Err(err_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Timed out waiting for HLS stream to start",
