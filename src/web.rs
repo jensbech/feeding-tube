@@ -84,6 +84,7 @@ fn require_admin(db: &Db, headers: &HeaderMap) -> Result<User, (StatusCode, Json
 }
 
 static INDEX_HTML: &str = include_str!("../static/index.html");
+const HLS_BASE_DIR: &str = "/tmp/ft-hls";
 
 pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::open().map_err(|e| format!("Failed to open database: {e}"))?;
@@ -138,7 +139,7 @@ pub async fn start(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let _ = session.process.kill().await;
         let _ = tokio::fs::remove_dir_all(&session.dir).await;
     }
-    let _ = tokio::fs::remove_dir_all("/tmp/ft-hls").await;
+    let _ = tokio::fs::remove_dir_all(HLS_BASE_DIR).await;
 
     Ok(())
 }
@@ -854,7 +855,7 @@ async fn hls_playlist(
             .await
             .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-        let dir = std::path::PathBuf::from(format!("/tmp/ft-hls/{}", id));
+        let dir = std::path::PathBuf::from(format!("{}/{}", HLS_BASE_DIR, id));
         tokio::fs::create_dir_all(&dir)
             .await
             .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create HLS dir: {e}")))?;
@@ -911,8 +912,8 @@ async fn hls_playlist(
         }
     }
 
-    let first_seg = std::path::PathBuf::from(format!("/tmp/ft-hls/{}/seg0000.ts", id));
-    let playlist_path = std::path::PathBuf::from(format!("/tmp/ft-hls/{}/playlist.m3u8", id));
+    let first_seg = std::path::PathBuf::from(format!("{}/{}/seg0000.ts", HLS_BASE_DIR, id));
+    let playlist_path = std::path::PathBuf::from(format!("{}/{}/playlist.m3u8", HLS_BASE_DIR, id));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
 
     loop {
@@ -974,18 +975,21 @@ async fn hls_segment(
         return Err(err_json(StatusCode::BAD_REQUEST, "Invalid segment name"));
     }
 
-    let base = std::path::PathBuf::from(format!("/tmp/ft-hls/{}", id));
+    let base = std::path::PathBuf::from(format!("{}/{}", HLS_BASE_DIR, id));
     let path = base.join(&segment);
     // Belt-and-suspenders: verify the resolved path stays inside the expected dir
     if !path.starts_with(&base) {
         return Err(err_json(StatusCode::BAD_REQUEST, "Invalid segment path"));
     }
 
-    // Poll up to 5 seconds for the segment to be written by FFmpeg
+    // Poll up to 5 seconds for the segment to be written by FFmpeg.
+    // Attempt File::open directly to avoid TOCTOU.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if tokio::fs::metadata(&path).await.is_ok() {
-            break;
+    let file = loop {
+        match tokio::fs::File::open(&path).await {
+            Ok(f) => break f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to open segment: {e}"))),
         }
         if tokio::time::Instant::now() >= deadline {
             return Err((
@@ -994,11 +998,7 @@ async fn hls_segment(
             ));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-
-    let file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to open segment: {e}")))?;
+    };
     let stream = ReaderStream::new(file);
 
     Response::builder()
