@@ -814,12 +814,145 @@ async fn get_watched(
 }
 
 async fn hls_playlist(
-    State(_db): State<Db>,
-    State(_hls): State<HlsState>,
-    _headers: HeaderMap,
-    Path(_id): Path<String>,
+    State(db): State<Db>,
+    State(hls): State<HlsState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
-    Err(err_json(StatusCode::NOT_IMPLEMENTED, "not yet implemented"))
+    let user = require_user(&db, &headers)?;
+    if !ytdlp::is_valid_video_id(&id) {
+        return Err(err_json(StatusCode::BAD_REQUEST, "Invalid video ID"));
+    }
+
+    let max_resolution = {
+        let db_guard = lock_db(&db)?;
+        db_guard.get_settings(user.id).max_resolution
+    };
+
+    let old_session: Option<HlsSession> = {
+        let guard = hls
+            .lock()
+            .map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "HLS lock poisoned"))?;
+        let is_same = guard.as_ref().map(|s| s.video_id == id).unwrap_or(false);
+        if is_same {
+            None
+        } else {
+            drop(guard);
+            let mut guard = hls
+                .lock()
+                .map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "HLS lock poisoned"))?;
+            guard.take()
+        }
+    };
+
+    if let Some(mut old) = old_session {
+        let _ = old.process.kill().await;
+        let _ = tokio::fs::remove_dir_all(&old.dir).await;
+    }
+
+    let needs_new = {
+        let guard = hls
+            .lock()
+            .map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "HLS lock poisoned"))?;
+        guard.is_none()
+    };
+
+    if needs_new {
+        let info = ytdlp::get_hls_info(&id, &max_resolution)
+            .await
+            .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+        let dir = std::path::PathBuf::from(format!("/tmp/ft-hls/{}", id));
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create HLS dir: {e}")))?;
+
+        let playlist_path = dir.join("playlist.m3u8");
+        let segment_pattern = dir.join("seg%04d.ts");
+
+        let mut ffmpeg_args: Vec<String> =
+            vec!["-hide_banner".into(), "-loglevel".into(), "error".into()];
+        ffmpeg_args.extend(["-i".into(), info.video_url]);
+        if let Some(audio_url) = info.audio_url {
+            ffmpeg_args.extend(["-i".into(), audio_url]);
+        }
+        if info.needs_transcode {
+            ffmpeg_args.extend([
+                "-c:v".into(), "libx264".into(),
+                "-preset".into(), "fast".into(),
+                "-c:a".into(), "aac".into(),
+            ]);
+        } else {
+            ffmpeg_args.extend(["-c:v".into(), "copy".into(), "-c:a".into(), "copy".into()]);
+        }
+        ffmpeg_args.extend([
+            "-f".into(), "hls".into(),
+            "-hls_time".into(), "4".into(),
+            "-hls_list_size".into(), "0".into(),
+            "-hls_segment_filename".into(), segment_pattern.to_str().unwrap().to_string(),
+            playlist_path.to_str().unwrap().to_string(),
+        ]);
+
+        let child = tokio::process::Command::new("ffmpeg")
+            .args(&ffmpeg_args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start ffmpeg: {e}"))
+            })?;
+
+        {
+            let mut guard = hls
+                .lock()
+                .map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "HLS lock poisoned"))?;
+            *guard = Some(HlsSession { video_id: id.clone(), process: child, dir });
+        }
+    }
+
+    let first_seg = std::path::PathBuf::from(format!("/tmp/ft-hls/{}/seg0000.ts", id));
+    let playlist_path = std::path::PathBuf::from(format!("/tmp/ft-hls/{}/playlist.m3u8", id));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+
+    loop {
+        if tokio::fs::metadata(&first_seg).await.is_ok() {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(err_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Timed out waiting for HLS stream to start",
+            ));
+        }
+        let exited = {
+            let mut guard = hls
+                .lock()
+                .map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "HLS lock poisoned"))?;
+            if let Some(ref mut session) = *guard {
+                if session.video_id == id {
+                    session.process.try_wait().ok().flatten().map(|s| !s.success()).unwrap_or(false)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if exited {
+            return Err(err_json(StatusCode::INTERNAL_SERVER_ERROR, "FFmpeg exited unexpectedly"));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    let content = tokio::fs::read_to_string(&playlist_path)
+        .await
+        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read playlist: {e}")))?;
+
+    Response::builder()
+        .header("Content-Type", "application/vnd.apple.mpegurl")
+        .header("Cache-Control", "no-cache")
+        .body(Body::from(content))
+        .map_err(|e| err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Response error: {e}")))
 }
 
 async fn hls_segment(
