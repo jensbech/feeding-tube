@@ -830,19 +830,11 @@ async fn hls_playlist(
     };
 
     let old_session: Option<HlsSession> = {
-        let guard = hls
+        let mut guard = hls
             .lock()
             .map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "HLS lock poisoned"))?;
         let is_same = guard.as_ref().map(|s| s.video_id == id).unwrap_or(false);
-        if is_same {
-            None
-        } else {
-            drop(guard);
-            let mut guard = hls
-                .lock()
-                .map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "HLS lock poisoned"))?;
-            guard.take()
-        }
+        if is_same { None } else { guard.take() }
     };
 
     if let Some(mut old) = old_session {
@@ -930,7 +922,7 @@ async fn hls_playlist(
                 .map_err(|_| err_json(StatusCode::INTERNAL_SERVER_ERROR, "HLS lock poisoned"))?;
             if let Some(ref mut session) = *guard {
                 if session.video_id == id {
-                    session.process.try_wait().ok().flatten().map(|s| !s.success()).unwrap_or(false)
+                    session.process.try_wait().ok().flatten().is_some()
                 } else {
                     false
                 }
