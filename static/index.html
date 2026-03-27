@@ -45,28 +45,29 @@ button {
   font-family: var(--font);
   cursor: pointer;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 13px;
   padding: 6px 12px;
-  transition: background 0.15s, opacity 0.15s;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
 
-button:hover { opacity: 0.85; }
+button:hover { opacity: 0.9; }
 button:active { opacity: 0.7; }
 
 input {
   font-family: var(--font);
   font-size: 13px;
-  background: var(--card);
+  background: var(--highlight);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 6px;
   padding: 7px 10px;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, background 0.15s;
 }
 
-input:focus { border-color: var(--accent); }
+input:focus { background: var(--bg); border-color: var(--accent); }
+
 
 .layout {
   display: flex;
@@ -259,13 +260,14 @@ input:focus { border-color: var(--accent); }
 .btn-icon .btn-label { font-size: 12px; margin-left: 4px; }
 
 .btn-action {
-  background: var(--highlight);
-  color: var(--text);
+  background: transparent;
+  color: var(--muted);
   font-size: 12px;
   padding: 5px 10px;
+  border: 1px solid var(--border);
 }
 
-.btn-action:hover { background: var(--muted); }
+.btn-action:hover { border-color: var(--accent); color: var(--accent); opacity: 1; }
 
 .btn-danger {
   background: var(--red);
@@ -333,6 +335,7 @@ input:focus { border-color: var(--accent); }
 
 .video-table tr { transition: background 0.1s; }
 .video-table tbody tr:hover { background: var(--highlight); }
+.video-table tbody tr:hover .btn-watch { color: var(--text); }
 .video-table tr.watched { opacity: 0.3; }
 .video-table tr.is-short .video-title::after {
   content: "SHORT";
@@ -404,18 +407,22 @@ input:focus { border-color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 20px 16px;
 }
 
 .pagination button {
   background: var(--highlight);
   color: var(--text);
-  padding: 6px 14px;
+  padding: 7px 18px;
+  border-radius: 20px;
+  font-size: 13px;
 }
 
-.pagination button:disabled { opacity: 0.3; cursor: default; }
-.pagination .page-info { font-size: 12px; color: var(--muted); }
+.pagination button:hover { background: var(--accent); color: var(--bg); opacity: 1; }
+.pagination button:disabled { opacity: 0.25; cursor: default; }
+.pagination button:disabled:hover { background: var(--highlight); color: var(--text); }
+.pagination .page-info { font-size: 12px; color: var(--muted); min-width: 80px; text-align: center; }
 
 .modal-overlay {
   position: fixed;
@@ -891,7 +898,7 @@ tr.kb-focus .video-title { color: var(--cyan); }
   width: 80px;
   height: 45px;
   object-fit: cover;
-  border-radius: 3px;
+  border-radius: 4px;
   display: block;
   background: var(--highlight);
 }
@@ -899,6 +906,79 @@ tr.kb-focus .video-title { color: var(--cyan); }
 @media (max-width: 480px) {
   .col-thumb { display: none; }
 }
+
+.mobile-only { display: none !important; }
+
+@media (max-width: 768px) {
+  .mobile-only { display: flex !important; }
+  .header-setting { display: none !important; }
+}
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 598;
+  display: none;
+}
+.settings-overlay.open { display: block; }
+
+.settings-panel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--card);
+  border-radius: 16px 16px 0 0;
+  border-top: 1px solid var(--border);
+  z-index: 599;
+  transform: translateY(100%);
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}
+.settings-panel.open { transform: translateY(0); }
+
+.settings-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--highlight);
+  border-radius: 2px;
+  margin: 14px auto 6px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  gap: 14px;
+  width: 100%;
+  background: none;
+  border-radius: 0;
+  text-align: left;
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row:active { background: var(--highlight); opacity: 1; }
+
+.settings-row-icon {
+  font-size: 15px;
+  width: 22px;
+  text-align: center;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.settings-row-label {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--text);
+}
+.settings-row-value {
+  font-size: 13px;
+  color: var(--muted);
+}
+.settings-row.active .settings-row-icon { color: var(--accent); }
+.settings-row.active .settings-row-value { color: var(--accent); }
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.css">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
@@ -947,26 +1027,27 @@ tr.kb-focus .video-title { color: var(--cyan); }
         <button class="search-clear" id="searchClear">&times;</button>
       </div>
       <div class="header-actions">
-        <button class="btn-icon" id="bgPlayBtn" title="Background playback" style="display:none;">
+        <button class="btn-icon header-setting" id="bgPlayBtn" title="Background playback" style="display:none;">
           <span id="bgPlayIcon">&#9835;</span>
           <span class="btn-label" id="bgPlayLabel">BG off</span>
         </button>
-        <button class="btn-icon" id="toggleShortsBtn" title="Toggle shorts visibility">
+        <button class="btn-icon header-setting" id="toggleShortsBtn" title="Toggle shorts visibility">
           <span id="shortsIcon">S</span>
           <span class="btn-label" id="shortsLabel">Shorts off</span>
         </button>
-        <button class="btn-icon" id="toggleResBtn" title="Toggle resolution">
+        <button class="btn-icon header-setting" id="toggleResBtn" title="Toggle resolution">
           <span id="resIcon">HD</span>
           <span class="btn-label" id="resLabel">1080p</span>
         </button>
-        <button class="btn-icon" id="toggleThumbsBtn" title="Toggle thumbnails">
-          <span id="thumbsIcon">&#9707;</span>
+        <button class="btn-icon header-setting" id="toggleThumbsBtn" title="Toggle thumbnails">
+          <span id="thumbsIcon">&#9706;</span>
           <span class="btn-label" id="thumbsLabel">Thumbs</span>
         </button>
-        <button class="btn-icon" id="refreshBtn" title="Refresh feeds">
+        <button class="btn-icon header-setting" id="refreshBtn" title="Refresh feeds">
           &#8635;
           <span class="btn-label">Refresh</span>
         </button>
+        <button class="btn-icon mobile-only" id="settingsBtn" title="Settings">&#9881;</button>
         <button class="user-menu-btn" id="userMenuBtn" title="User"></button>
       </div>
     </header>
@@ -1005,6 +1086,36 @@ tr.kb-focus .video-title { color: var(--cyan); }
     <input type="text" placeholder="Name..." id="adminNewName" autocomplete="off">
     <button type="submit">Add</button>
   </form>
+</div>
+
+<div class="settings-overlay" id="settingsOverlay"></div>
+<div class="settings-panel" id="settingsPanel">
+  <div class="settings-handle"></div>
+  <button class="settings-row" id="sp-bgplay">
+    <span class="settings-row-icon">&#9835;</span>
+    <span class="settings-row-label">Background audio</span>
+    <span class="settings-row-value" id="sp-bgplay-val">Off</span>
+  </button>
+  <button class="settings-row" id="sp-shorts">
+    <span class="settings-row-icon">S</span>
+    <span class="settings-row-label">Show shorts</span>
+    <span class="settings-row-value" id="sp-shorts-val">Hidden</span>
+  </button>
+  <button class="settings-row" id="sp-res">
+    <span class="settings-row-icon">HD</span>
+    <span class="settings-row-label">Video quality</span>
+    <span class="settings-row-value" id="sp-res-val">1080p</span>
+  </button>
+  <button class="settings-row" id="sp-thumbs">
+    <span class="settings-row-icon">&#9706;</span>
+    <span class="settings-row-label">Thumbnails</span>
+    <span class="settings-row-value" id="sp-thumbs-val">Off</span>
+  </button>
+  <button class="settings-row" id="sp-refresh">
+    <span class="settings-row-icon">&#8635;</span>
+    <span class="settings-row-label">Refresh feeds</span>
+    <span class="settings-row-value" id="sp-refresh-val"></span>
+  </button>
 </div>
 
 <script>
@@ -1242,7 +1353,7 @@ function renderContent() {
     if (v.duration_string) subParts.push(esc(v.duration_string));
 
     const thumbCell = state.showThumbs
-      ? `<td class="col-thumb"><img src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg" class="video-thumb" loading="lazy" alt=""></td>`
+      ? `<td class="col-thumb"><img src="https://i.ytimg.com/vi/${v.id}/hqdefault.jpg" class="video-thumb" loading="lazy" alt="" onerror="this.style.visibility='hidden'"></td>`
       : '';
 
     tableHtml += `<tr class="${classes.join(' ')}" data-vid="${esc(v.id)}">
@@ -1501,14 +1612,17 @@ document.getElementById('bgPlayBtn').addEventListener('click', () => {
 
 function updateBgPlayButton() {
   const btn = document.getElementById('bgPlayBtn');
-  const icon = document.getElementById('bgPlayIcon');
   const label = document.getElementById('bgPlayLabel');
+  const row = document.getElementById('sp-bgplay');
+  const val = document.getElementById('sp-bgplay-val');
   if (state.bgPlay) {
     btn.classList.add('active');
     label.textContent = 'BG on';
+    if (row) { row.classList.add('active'); val.textContent = 'On'; }
   } else {
     btn.classList.remove('active');
     label.textContent = 'BG off';
+    if (row) { row.classList.remove('active'); val.textContent = 'Off'; }
   }
 }
 
@@ -1730,14 +1844,18 @@ function updateShortsButton() {
   const btn = document.getElementById('toggleShortsBtn');
   const icon = document.getElementById('shortsIcon');
   const label = document.getElementById('shortsLabel');
+  const row = document.getElementById('sp-shorts');
+  const val = document.getElementById('sp-shorts-val');
   if (state.hideShorts) {
     btn.classList.remove('active');
     icon.style.opacity = '0.5';
     label.textContent = 'Shorts off';
+    if (row) { row.classList.remove('active'); val.textContent = 'Hidden'; }
   } else {
     btn.classList.add('active');
     icon.style.opacity = '1';
     label.textContent = 'Shorts on';
+    if (row) { row.classList.add('active'); val.textContent = 'Shown'; }
   }
 }
 
@@ -1764,14 +1882,18 @@ function updateResButton() {
   const btn = document.getElementById('toggleResBtn');
   const label = document.getElementById('resLabel');
   const icon = document.getElementById('resIcon');
+  const row = document.getElementById('sp-res');
+  const val = document.getElementById('sp-res-val');
   if (state.maxResolution === '1080') {
     btn.classList.add('active');
     icon.textContent = 'HD';
     label.textContent = '1080p';
+    if (row) { row.classList.add('active'); val.textContent = '1080p'; }
   } else {
     btn.classList.remove('active');
     icon.textContent = '4K';
     label.textContent = 'Max';
+    if (row) { row.classList.remove('active'); val.textContent = 'Max'; }
   }
 }
 
@@ -1784,12 +1906,50 @@ document.getElementById('toggleThumbsBtn').addEventListener('click', function ()
 
 function updateThumbsButton() {
   const btn = document.getElementById('toggleThumbsBtn');
+  const row = document.getElementById('sp-thumbs');
+  const val = document.getElementById('sp-thumbs-val');
   if (state.showThumbs) {
     btn.classList.add('active');
+    if (row) { row.classList.add('active'); val.textContent = 'On'; }
   } else {
     btn.classList.remove('active');
+    if (row) { row.classList.remove('active'); val.textContent = 'Off'; }
   }
 }
+
+function openSettingsPanel() {
+  document.getElementById('settingsPanel').classList.add('open');
+  document.getElementById('settingsOverlay').classList.add('open');
+}
+
+function closeSettingsPanel() {
+  document.getElementById('settingsPanel').classList.remove('open');
+  document.getElementById('settingsOverlay').classList.remove('open');
+}
+
+document.getElementById('settingsBtn').addEventListener('click', openSettingsPanel);
+document.getElementById('settingsOverlay').addEventListener('click', closeSettingsPanel);
+
+document.getElementById('sp-bgplay').addEventListener('click', () => {
+  document.getElementById('bgPlayBtn').click();
+  closeSettingsPanel();
+});
+document.getElementById('sp-shorts').addEventListener('click', async () => {
+  closeSettingsPanel();
+  document.getElementById('toggleShortsBtn').click();
+});
+document.getElementById('sp-res').addEventListener('click', async () => {
+  closeSettingsPanel();
+  document.getElementById('toggleResBtn').click();
+});
+document.getElementById('sp-thumbs').addEventListener('click', () => {
+  document.getElementById('toggleThumbsBtn').click();
+  updateThumbsButton();
+});
+document.getElementById('sp-refresh').addEventListener('click', () => {
+  closeSettingsPanel();
+  document.getElementById('refreshBtn').click();
+});
 
 document.getElementById('mobileMenuBtn').addEventListener('click', () => {
   document.getElementById('sidebar').classList.add('open');
